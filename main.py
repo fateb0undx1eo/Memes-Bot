@@ -7,7 +7,7 @@ import random
 import logging
 import sys
 import shutil
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from collections import deque
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
@@ -120,13 +120,14 @@ async def fetch_random_meme(target):
             
             try:
                 async for post in subreddit.hot(limit=100):
+                    await asyncio.sleep(0)  # Yield to event loop (fixes asyncpraw timeout)
                     if (post.stickied or not post.url or post.id in posted_ids):
                         continue
                     if hasattr(target, 'is_nsfw') and not target.is_nsfw() and post.over_18:
                         continue
                     
                     clean_url = post.url.split('?')[0]
-                    if any(clean_url.lower().endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".gif")):
+                    if any(clean_url.lower().endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".gif", ".gifv")):
                         posts.append(post)
                         if len(posts) >= 15:
                             break
@@ -159,7 +160,7 @@ def make_embed(post):
         title=post.title[:250],
         url=f"https://reddit.com{post.permalink}",
         color=random.randint(0, 0xFFFFFF),
-        timestamp=datetime.utcnow()
+        timestamp=datetime.now(UTC)
     )
     
     if post.url.endswith(".gifv"):
@@ -201,16 +202,16 @@ async def post_meme(ctx=None):
 async def meme_scheduler():
     if not hasattr(bot, "next_post_minutes"):
         bot.next_post_minutes = random.uniform(POST_INTERVAL_MIN, POST_INTERVAL_MAX)
-        bot.last_post_time = datetime.utcnow()
+        bot.last_post_time = datetime.now(UTC)
         logger.info(f"Initialized scheduler. First post in {bot.next_post_minutes:.1f} minutes")
 
-    elapsed = (datetime.utcnow() - bot.last_post_time).total_seconds() / 60
+    elapsed = (datetime.now(UTC) - bot.last_post_time).total_seconds() / 60
     
     if elapsed >= bot.next_post_minutes and not getattr(bot, "paused", False):
         success = await post_meme()
         
         if success:
-            bot.last_post_time = datetime.utcnow()
+            bot.last_post_time = datetime.now(UTC)
             bot.next_post_minutes = random.uniform(POST_INTERVAL_MIN, POST_INTERVAL_MAX)
             logger.info(f"Next post scheduled in {bot.next_post_minutes:.1f} minutes")
         else:
@@ -305,24 +306,22 @@ async def stats(ctx):
     
     if hasattr(bot, "last_post_time") and hasattr(bot, "next_post_minutes"):
         next_post = bot.last_post_time + timedelta(minutes=bot.next_post_minutes)
-        mins_left = max(0, int((next_post - datetime.utcnow()).total_seconds() / 60))
+        mins_left = max(0, int((next_post - datetime.now(UTC)).total_seconds() / 60))
         embed.add_field(name="Next Auto Post", value=f"In {mins_left} minutes", inline=False)
     
     embed.add_field(name="Subreddits", value="\n".join([f"• r/{sub}" for sub in ALL_MEMES]), inline=False)
     
     if hasattr(bot, "start_time"):
-        uptime = datetime.utcnow() - bot.start_time
+        uptime = datetime.now(UTC) - bot.start_time
         embed.add_field(name="Uptime", value=str(uptime).split(".")[0], inline=False)
         
     await ctx.send(embed=embed)
-
-# ... rest of owner commands remain the same (addsub/removesub/debug etc.)
 
 # ==== Events ====
 @bot.event
 async def on_ready():
     logger.info(f"Logged in as {bot.user} (ID: {bot.user.id})")
-    bot.start_time = datetime.utcnow()
+    bot.start_time = datetime.now(UTC)
     load_cache()
     
     if len(posted_ids) > 500:
