@@ -149,16 +149,21 @@ async def fetch_random_meme(target):
 
 def make_embed(post):
     embed = discord.Embed(
-        title=post.title[:250],
-        url=f"https://reddit.com{post.permalink}",
-        color=random.randint(0, 0xFFFFFF),
-        timestamp=datetime.utcnow()
+        title=post.title[:250],  # Meme title only
+        color=random.randint(0, 0xFFFFFF)
     )
-    embed.set_image(url=post.url if not post.url.endswith(".gifv") else post.url.replace(".gifv", ".gif"))
+
+    # Show the image (gifv handled)
+    if post.url.endswith(".gifv"):
+        embed.set_image(url=post.url.replace(".gifv", ".gif"))
+    else:
+        embed.set_image(url=post.url)
+
+    # Footer instructing voting + subreddit source
     embed.set_footer(
-        text=f"👍 {post.score} | 💬 {post.num_comments} | r/{post.subreddit}",
-        icon_url="https://www.redditstatic.com/desktop2x/img/favicon/favicon-32x32.png"
+        text=f"From r/{post.subreddit} | React below to vote ⬆⬇"
     )
+
     return embed
 
 async def post_meme(ctx=None):
