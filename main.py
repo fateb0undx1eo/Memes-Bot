@@ -252,7 +252,41 @@ async def on_command_error(ctx, error):
         await ctx.send(f"⏳ Cooldown active! Try again in {error.retry_after:.0f} seconds.")
     else:
         logger.error(f"Command error: {error}", exc_info=True)
+@bot.event
+async def on_message(message):
+    # Ignore messages from the bot itself
+    if message.author.bot:
+        return
 
+    # Only watch the memes channel
+    if message.channel.id == MEME_CHANNEL_ID and message.attachments:
+        # Only handle media files (images/videos)
+        for attachment in message.attachments:
+            if attachment.filename.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".mp4", ".mov", ".webm")):
+                
+                # Repost the media as the bot
+                embed = discord.Embed(
+                    description=f"Posted by {message.author.mention}",
+                    color=random.randint(0, 0xFFFFFF),
+                    timestamp=datetime.utcnow()
+                )
+                embed.set_image(url=attachment.url)
+                repost = await message.channel.send(embed=embed)
+
+                # React with upvote/downvote like auto memes
+                await repost.add_reaction(UPVOTE)
+                await repost.add_reaction(DOWNVOTE)
+
+                # Track it in meme_scores
+                meme_scores[repost.id] = {"score": 0, "embed": embed, "url": attachment.url}
+
+                # Delete the original message
+                await message.delete()
+                break  # Only repost first media if multiple
+
+    # Important: Process normal commands after our event
+    await bot.process_commands(message)
+    
 # ==== Start Bot ====
 if __name__ == "__main__":
     keep_alive()
