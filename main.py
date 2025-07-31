@@ -356,7 +356,7 @@ async def on_command_error(ctx, error):
         logger.error(f"Command error: {error}", exc_info=True)
 
 # ==== Start Bot ====
-if _name_ == "_main_":
+if __name__ == "__main__":
     try:
         keep_alive()
         logger.info("Webserver started for keep-alive")
