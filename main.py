@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from collections import deque
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
+from webserver import keep_alive
 
 # ==== Setup ====
 load_dotenv()
@@ -23,12 +24,9 @@ logger = logging.getLogger('MemeBot')
 # ==== CONFIG ====
 ALL_MEMES = ["memes", "dankmemes", "funny", "me_irl", "animememes", "goodanimemes", "wholesomememes"]
 MEME_CHANNEL_ID = int(os.environ.get('MEMES_CHANNEL_ID', 0))
-POST_INTERVAL_MIN = 5  # Minimum minutes between posts
-POST_INTERVAL_MAX = 10  # Maximum minutes between posts
-CACHE_SIZE = 1000  # Number of post IDs to remember
-
-# ==== Import Webserver from Separate File ====
-from webserver import keep_alive
+POST_INTERVAL_MIN = 5
+POST_INTERVAL_MAX = 10
+CACHE_SIZE = 1000
 
 # ==== Reddit Client ====
 reddit = asyncpraw.Reddit(
@@ -50,7 +48,7 @@ bot = commands.Bot(
 # ==== Data Management ====
 CACHE_FILE = "cache.json"
 posted_ids = set()
-posted_queue = deque(maxlen=CACHE_SIZE)  # FIFO tracking
+posted_queue = deque(maxlen=CACHE_SIZE)
 
 def load_cache():
     global posted_ids, posted_queue
@@ -59,19 +57,15 @@ def load_cache():
             with open(CACHE_FILE, "r") as f:
                 cache_data = json.load(f)
                 if isinstance(cache_data, list):
-                    # Convert old list format to new deque format
                     posted_queue = deque(cache_data, maxlen=CACHE_SIZE)
                     posted_ids = set(cache_data)
-                    logger.info(f"Loaded {len(posted_ids)} cached post IDs (converted to FIFO)")
-                else:
-                    logger.warning("Invalid cache format - resetting cache")
+                    logger.info(f"Loaded {len(posted_ids)} cached post IDs")
     except Exception as e:
         logger.error(f"Cache load error: {e}")
 
 def save_cache():
     try:
         with open(CACHE_FILE, "w") as f:
-            # Save deque as list for JSON serialization
             json.dump(list(posted_queue), f)
     except Exception as e:
         logger.error(f"Cache save error: {e}")
@@ -86,7 +80,6 @@ async def fetch_random_meme():
         
         try:
             async for post in subreddit.hot(limit=150):
-                # Skip invalid posts
                 if (post.stickied or 
                     post.over_18 or 
                     not post.url or 
@@ -94,7 +87,6 @@ async def fetch_random_meme():
                     post.url.endswith(".mp4")):
                     continue
                 
-                # Check valid image extensions
                 if any(post.url.lower().endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".gif", ".gifv")):
                     posts.append(post)
                     if len(posts) >= 25:
@@ -108,7 +100,6 @@ async def fetch_random_meme():
             
         post = random.choice(posts)
         
-        # Update cache with FIFO tracking
         if len(posted_queue) == CACHE_SIZE:
             oldest_id = posted_queue.popleft()
             posted_ids.remove(oldest_id)
@@ -131,7 +122,6 @@ def make_embed(post):
         timestamp=datetime.utcnow()
     )
     
-    # Handle GIFV format
     if post.url.endswith(".gifv"):
         embed.set_image(url=post.url.replace(".gifv", ".gif"))
     else:
@@ -144,7 +134,6 @@ def make_embed(post):
     return embed
 
 async def post_meme():
-    """Attempt to post a meme to the channel"""
     try:
         channel = bot.get_channel(MEME_CHANNEL_ID)
         if not channel:
@@ -165,27 +154,21 @@ async def post_meme():
 # ==== Scheduler Task ====
 @tasks.loop(minutes=1.0)
 async def meme_scheduler():
-    """Check if it's time to post a meme using stateful scheduling"""
-    # Initialize scheduler state on first run
     if not hasattr(bot, "next_post_minutes"):
         bot.next_post_minutes = random.uniform(POST_INTERVAL_MIN, POST_INTERVAL_MAX)
         bot.last_post_time = datetime.utcnow()
         logger.info(f"Initialized scheduler. First post in {bot.next_post_minutes:.1f} minutes")
 
-    # Calculate elapsed time since last post
     elapsed = (datetime.utcnow() - bot.last_post_time).total_seconds() / 60
     
-    # Check if it's time to post
     if elapsed >= bot.next_post_minutes:
         success = await post_meme()
         
         if success:
-            # Update timing after successful post
             bot.last_post_time = datetime.utcnow()
             bot.next_post_minutes = random.uniform(POST_INTERVAL_MIN, POST_INTERVAL_MAX)
             logger.info(f"Next post scheduled in {bot.next_post_minutes:.1f} minutes")
         else:
-            # Retry sooner if post failed
             bot.next_post_minutes = random.uniform(1, 3)
             logger.warning(f"Post failed. Retrying in {bot.next_post_minutes:.1f} minutes")
 
@@ -193,7 +176,6 @@ async def meme_scheduler():
 @bot.command()
 @commands.cooldown(1, 30, commands.BucketType.user)
 async def meme(ctx):
-    """Get a random meme"""
     async with ctx.typing():
         post = await fetch_random_meme()
         if post:
@@ -203,7 +185,6 @@ async def meme(ctx):
 
 @bot.command()
 async def invite(ctx):
-    """Get bot invite link"""
     perms = discord.Permissions(
         send_messages=True,
         embed_links=True,
@@ -214,7 +195,6 @@ async def invite(ctx):
 
 @bot.command()
 async def stats(ctx):
-    """Show bot stats"""
     embed = discord.Embed(
         title="🤖 Meme Bot Stats",
         color=0x00FFAA,
@@ -238,13 +218,11 @@ async def stats(ctx):
 @bot.command()
 @commands.is_owner()
 async def subreddits(ctx):
-    """List monitored subreddits"""
     await ctx.send(f"📋 Monitored subreddits:\n{', '.join([f'r/{s}' for s in ALL_MEMES])}")
 
 @bot.command()
 @commands.is_owner()
 async def reschedule(ctx):
-    """Force immediate rescheduling"""
     if hasattr(bot, "next_post_minutes"):
         bot.next_post_minutes = 0
         await ctx.send("⏩ Next post will be attempted within 1 minute")
@@ -278,18 +256,24 @@ async def on_command_error(ctx, error):
     else:
         logger.error(f"Command error: {error}", exc_info=True)
 
-# ==== Start Webserver & Run Bot ====
+# ==== Start Bot ====
 if _name_ == "_main_":
-    # Start keep-alive webserver
-    keep_alive()
-    logger.info("Webserver started for keep-alive")
-    
-    # Get Discord token from environment
     try:
+        # Start keep-alive webserver
+        keep_alive()
+        logger.info("Webserver started for keep-alive")
+        
+        # Get Discord token
         token = os.environ['discordkey']
+        
+        # Start the bot
+        bot.run(token)
     except KeyError:
-        logger.error("Environment variable 'discordkey' not found. Exiting.")
+        logger.error("Missing 'discordkey' environment variable")
         sys.exit(1)
-    
-    # Start the bot
-    bot.run(token)
+    except Exception as e:
+        logger.error(f"Fatal error: {e}", exc_info=True)
+    finally:
+        # Properly close resources
+        asyncio.run(reddit.close())
+        logger.info("Reddit client closed")
