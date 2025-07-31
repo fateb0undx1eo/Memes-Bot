@@ -103,48 +103,56 @@ def save_subreddits():
     shutil.move(temp_file, SUB_FILE)
 
 # ==== Core Functions ====
-async def fetch_random_meme(ctx=None):
+async def fetch_random_meme(target):
+    """Target can be either a context or channel object"""
     try:
-        subreddit_name = random.choice(ALL_MEMES)
-        logger.info(f"Fetching from r/{subreddit_name}")
-        subreddit = await reddit.subreddit(subreddit_name)
-        posts = []
-        
-        try:
-            async for post in subreddit.hot(limit=150):
-                if (post.stickied or 
-                    not post.url or 
-                    post.id in posted_ids or
-                    post.url.endswith(".mp4")):
-                    continue
-                
-                # Skip NSFW in non-NSFW channels
-                if ctx and not ctx.channel.is_nsfw() and post.over_18:
-                    continue
-                
-                if any(post.url.lower().endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".gif", ".gifv")):
-                    posts.append(post)
-                    if len(posts) >= 25:
-                        break
-        except asyncio.TimeoutError:
-            logger.warning(f"Timeout fetching from r/{subreddit_name}")
-        
-        if not posts:
-            logger.warning(f"No new memes in r/{subreddit_name}")
-            return None
+        # Try multiple subreddits before giving up
+        max_attempts = 5
+        for attempt in range(max_attempts):
+            subreddit_name = random.choice(ALL_MEMES)
+            logger.info(f"Attempt {attempt+1}: Fetching from r/{subreddit_name}")
+            subreddit = await reddit.subreddit(subreddit_name)
+            posts = []
             
-        post = random.choice(posts)
-        
-        # Update cache
-        if len(posted_queue) == CACHE_SIZE:
-            oldest_id = posted_queue.popleft()
-            posted_ids.remove(oldest_id)
+            try:
+                async for post in subreddit.hot(limit=100):
+                    # Skip criteria
+                    if (post.stickied or 
+                        not post.url or 
+                        post.id in posted_ids):
+                        continue
+                    
+                    # Check NSFW if target is a channel
+                    if hasattr(target, 'is_nsfw') and not target.is_nsfw() and post.over_18:
+                        continue
+                    
+                    # Check if valid image (more flexible check)
+                    clean_url = post.url.split('?')[0]  # Remove URL parameters
+                    if any(clean_url.lower().endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".gif")):
+                        posts.append(post)
+                        if len(posts) >= 15:  # Require fewer valid posts
+                            break
             
-        posted_queue.append(post.id)
-        posted_ids.add(post.id)
-        save_cache()
+            except (asyncio.TimeoutError, asyncpraw.exceptions.APIException):
+                logger.warning(f"Error fetching from r/{subreddit_name}")
+                continue
+            
+            if posts:
+                post = random.choice(posts)
+                
+                # Update cache
+                if len(posted_queue) == CACHE_SIZE:
+                    oldest_id = posted_queue.popleft()
+                    posted_ids.remove(oldest_id)
+                    
+                posted_queue.append(post.id)
+                posted_ids.add(post.id)
+                save_cache()
+                
+                return post
         
-        return post
+        logger.warning("No suitable memes found after multiple attempts")
+        return None
         
     except Exception as e:
         logger.error(f"Fetch error: {e}", exc_info=True)
@@ -171,18 +179,15 @@ def make_embed(post):
 
 async def post_meme(ctx=None):
     try:
-        channel = bot.get_channel(MEME_CHANNEL_ID)
-        if not channel:
+        target_channel = ctx.channel if ctx else bot.get_channel(MEME_CHANNEL_ID)
+        if not target_channel:
             logger.error("Meme channel not found!")
             return False
 
-        class DummyContext:
-            channel = channel
-        
-        post = await fetch_random_meme(DummyContext())
+        post = await fetch_random_meme(target_channel)
         if post:
             embed = make_embed(post)
-            msg = await channel.send(embed=embed)
+            msg = await target_channel.send(embed=embed)
             await msg.add_reaction(UPVOTE)
             await msg.add_reaction(DOWNVOTE)
             meme_scores[msg.id] = {"score": 0, "embed": embed, "url": post.url}
@@ -266,7 +271,7 @@ async def on_reaction_remove(reaction, user):
 @commands.cooldown(1, 30, commands.BucketType.user)
 async def meme(ctx):
     async with ctx.typing():
-        post = await fetch_random_meme(ctx)
+        post = await fetch_random_meme(ctx.channel)
         if post:
             embed = make_embed(post)
             msg = await ctx.send(embed=embed)
@@ -314,6 +319,17 @@ async def stats(ctx):
         embed.add_field(name="Uptime", value=str(uptime).split(".")[0], inline=False)
         
     await ctx.send(embed=embed)
+
+@bot.command()
+@commands.is_owner()
+async def debug(ctx):
+    """Check current cache status"""
+    await ctx.send(
+        f"**Cache Status**\n"
+        f"Tracked IDs: {len(posted_ids)}\n"
+        f"Subreddits: {len(ALL_MEMES)}\n"
+        f"Last 5: {list(posted_queue)[-5:] if posted_queue else 'None'}"
+    )
 
 # Owner-only admin commands
 @bot.command()
@@ -370,6 +386,13 @@ async def on_ready():
     logger.info(f"Logged in as {bot.user} (ID: {bot.user.id})")
     bot.start_time = datetime.utcnow()
     load_cache()
+    
+    # Reset cache if too large
+    if len(posted_ids) > 500:
+        posted_ids.clear()
+        posted_queue.clear()
+        save_cache()
+        logger.info("Reset cache due to size")
     
     if not meme_scheduler.is_running():
         meme_scheduler.start()
