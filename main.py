@@ -396,11 +396,11 @@ async def on_command_error(ctx, error):
         logger.error(f"Command error: {error}", exc_info=True)
 
 # ==== Start Bot ====
-if _name_ == "_main_":
+if __name__ == "__main__":
     try:
         keep_alive()  # webserver keep-alive
         logger.info("Webserver started for keep-alive")
-        
+
         token = os.environ['discordkey']
         bot.run(token)
     except KeyError:
@@ -409,7 +409,11 @@ if _name_ == "_main_":
     except Exception as e:
         logger.error(f"Fatal error: {e}", exc_info=True)
     finally:
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(reddit.close())
-        logger.info("Reddit client closed")
-        loop.close()
+        try:
+            loop = asyncio.get_event_loop()
+            if not loop.is_closed():
+                loop.run_until_complete(reddit.close())
+                logger.info("Reddit client closed")
+                loop.close()
+        except Exception as e:
+            logger.error(f"Error closing Reddit client: {e}", exc_info=True)
