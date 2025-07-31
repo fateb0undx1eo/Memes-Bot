@@ -10,6 +10,7 @@ import shutil
 from datetime import datetime, timedelta
 from collections import deque
 from discord.ext import commands, tasks
+from discord.ext.commands import has_permissions
 from dotenv import load_dotenv
 from webserver import keep_alive
 
@@ -64,7 +65,6 @@ meme_of_the_day = {"score": 0, "post_id": None, "embed": None}
 reddit = None
 
 async def init_reddit():
-    """Initialize asyncpraw after loop is alive"""
     global reddit
     reddit = asyncpraw.Reddit(
         client_id=os.environ['REDDIT_CLIENT_ID'],
@@ -114,7 +114,6 @@ def save_subreddits():
 
 # ==== Core Functions ====
 async def fetch_random_meme(target):
-    """Target can be either a context or channel object"""
     try:
         max_attempts = 5
         for attempt in range(max_attempts):
@@ -201,22 +200,24 @@ async def post_meme(ctx=None):
 # ==== Scheduler Tasks ====
 @tasks.loop(minutes=1.0)
 async def meme_scheduler():
+    """Check every minute if it's time to post a meme."""
+    if not hasattr(bot, "last_post_time"):
+        bot.last_post_time = datetime.utcnow() - timedelta(minutes=POST_INTERVAL_MAX)
     if not hasattr(bot, "next_post_minutes"):
         bot.next_post_minutes = random.uniform(POST_INTERVAL_MIN, POST_INTERVAL_MAX)
-        bot.last_post_time = datetime.utcnow()
-        logger.info(f"Initialized scheduler. First post in {bot.next_post_minutes:.1f} minutes")
 
     elapsed = (datetime.utcnow() - bot.last_post_time).total_seconds() / 60
-    
+
     if elapsed >= bot.next_post_minutes and not getattr(bot, "paused", False):
         success = await post_meme()
+        bot.last_post_time = datetime.utcnow()
+
         if success:
-            bot.last_post_time = datetime.utcnow()
             bot.next_post_minutes = random.uniform(POST_INTERVAL_MIN, POST_INTERVAL_MAX)
-            logger.info(f"Next post scheduled in {bot.next_post_minutes:.1f} minutes")
+            logger.info(f"✅ Meme posted! Next in {bot.next_post_minutes:.1f} minutes")
         else:
-            bot.next_post_minutes = random.uniform(1, 3)
-            logger.warning(f"Post failed. Retrying in {bot.next_post_minutes:.1f} minutes")
+            bot.next_post_minutes = 1
+            logger.warning("⚠ No meme found. Will retry in 1 minute.")
 
 @tasks.loop(hours=24)
 async def reset_meme_of_the_day():
@@ -282,6 +283,66 @@ async def bestmeme(ctx):
         await ctx.send("😔 No meme of the day yet.")
 
 @bot.command()
+async def stats(ctx):
+    if not hasattr(bot, "last_post_time"):
+        bot.last_post_time = datetime.utcnow()
+    if not hasattr(bot, "next_post_minutes"):
+        bot.next_post_minutes = POST_INTERVAL_MIN
+
+    embed = discord.Embed(
+        title="🤖 Meme Bot Stats",
+        color=0x00FFAA,
+        description=f"Tracking {len(posted_ids)} posts across {len(ALL_MEMES)} subreddits"
+    )
+
+    next_post = bot.last_post_time + timedelta(minutes=bot.next_post_minutes)
+    mins_left = max(0, int((next_post - datetime.utcnow()).total_seconds() / 60))
+    embed.add_field(name="Next Auto Post", value=f"In {mins_left} minutes", inline=False)
+
+    embed.add_field(name="Subreddits", value="\n".join([f"• r/{sub}" for sub in ALL_MEMES]), inline=False)
+
+    if hasattr(bot, "start_time"):
+        uptime = datetime.utcnow() - bot.start_time
+        embed.add_field(name="Uptime", value=str(uptime).split(".")[0], inline=False)
+
+    await ctx.send(embed=embed)
+
+# ==== Admin Commands ====
+@bot.command()
+@has_permissions(administrator=True)
+async def addsub(ctx, subreddit):
+    subreddit = subreddit.strip().lower()
+    if subreddit not in ALL_MEMES:
+        ALL_MEMES.append(subreddit)
+        save_subreddits()
+        await ctx.send(f"✅ Added r/{subreddit}")
+    else:
+        await ctx.send("⚠ Already in the list!")
+
+@bot.command()
+@has_permissions(administrator=True)
+async def removesub(ctx, subreddit):
+    subreddit = subreddit.strip().lower()
+    if subreddit in ALL_MEMES:
+        ALL_MEMES.remove(subreddit)
+        save_subreddits()
+        await ctx.send(f"✅ Removed r/{subreddit}")
+    else:
+        await ctx.send("⚠ Not found!")
+
+@bot.command()
+@has_permissions(administrator=True)
+async def pause(ctx):
+    bot.paused = True
+    await ctx.send("⏸ Auto-posting paused.")
+
+@bot.command()
+@has_permissions(administrator=True)
+async def resume(ctx):
+    bot.paused = False
+    await ctx.send("▶ Auto-posting resumed.")
+
+@bot.command()
 async def invite(ctx):
     perms = discord.Permissions(
         send_messages=True,
@@ -292,27 +353,6 @@ async def invite(ctx):
     )
     await ctx.send(f"🔗 Invite me:\n{discord.utils.oauth_url(bot.user.id, permissions=perms)}")
 
-@bot.command()
-async def stats(ctx):
-    embed = discord.Embed(
-        title="🤖 Meme Bot Stats",
-        color=0x00FFAA,
-        description=f"Tracking {len(posted_ids)} posts across {len(ALL_MEMES)} subreddits"
-    )
-    
-    if hasattr(bot, "last_post_time") and hasattr(bot, "next_post_minutes"):
-        next_post = bot.last_post_time + timedelta(minutes=bot.next_post_minutes)
-        mins_left = max(0, int((next_post - datetime.utcnow()).total_seconds() / 60))
-        embed.add_field(name="Next Auto Post", value=f"In {mins_left} minutes", inline=False)
-    
-    embed.add_field(name="Subreddits", value="\n".join([f"• r/{sub}" for sub in ALL_MEMES]), inline=False)
-    
-    if hasattr(bot, "start_time"):
-        uptime = datetime.utcnow() - bot.start_time
-        embed.add_field(name="Uptime", value=str(uptime).split(".")[0], inline=False)
-        
-    await ctx.send(embed=embed)
-
 # ==== Events ====
 @bot.event
 async def on_ready():
@@ -320,7 +360,6 @@ async def on_ready():
     bot.start_time = datetime.utcnow()
     logger.info(f"Logged in as {bot.user} (ID: {bot.user.id})")
 
-    # Initialize reddit once loop is alive
     if reddit is None:
         await init_reddit()
 
@@ -342,13 +381,11 @@ async def on_ready():
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandOnCooldown):
         await ctx.send(f"⏳ Cooldown active! Try again in {error.retry_after:.0f} seconds.")
-    elif isinstance(error, commands.NotOwner):
-        await ctx.send("🔒 This command is for bot owners only!")
     else:
         logger.error(f"Command error: {error}", exc_info=True)
 
 # ==== Start Bot ====
-if __name__ == "__main__":
+if _name_ == "_main_":
     keep_alive()
     logger.info("Webserver started for keep-alive")
 
