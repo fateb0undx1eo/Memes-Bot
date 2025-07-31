@@ -7,16 +7,19 @@ import random
 import logging
 import sys
 import shutil
-from datetime import datetime, timedelta, UTC
+from datetime import datetime, timedelta
 from collections import deque
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 from webserver import keep_alive
 
 # ==== Python 3.13 Fix ====
-# Force default event loop to avoid "Timeout context manager" errors on Render
 if sys.version_info >= (3, 13):
-    asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
+    try:
+        import uvloop
+        asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+    except ImportError:
+        asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
 
 # ==== Setup ====
 load_dotenv()
@@ -57,23 +60,26 @@ DOWNVOTE = "<a:55emoji_76:1390673781743423540>"
 meme_scores = {}  # msg_id: {"score": int, "embed": Embed, "url": str}
 meme_of_the_day = {"score": 0, "post_id": None, "embed": None}
 
-# ==== Reddit Client ====
-reddit = asyncpraw.Reddit(
-    client_id=os.environ['REDDIT_CLIENT_ID'],
-    client_secret=os.environ['REDDIT_CLIENT_SECRET'],
-    user_agent=os.environ['REDDIT_USER_AGENT'],
-    timeout=15
-)
+# Reddit client (lazy init)
+reddit = None
+
+async def init_reddit():
+    """Initialize asyncpraw after loop is alive"""
+    global reddit
+    reddit = asyncpraw.Reddit(
+        client_id=os.environ['REDDIT_CLIENT_ID'],
+        client_secret=os.environ['REDDIT_CLIENT_SECRET'],
+        user_agent=os.environ['REDDIT_USER_AGENT'],
+        timeout=15
+    )
+    await reddit.read_only()
+    logger.info("✅ Reddit client initialized")
 
 # ==== Bot Setup ====
 intents = discord.Intents.default()
 intents.message_content = True
 intents.reactions = True
-bot = commands.Bot(
-    command_prefix="!",
-    intents=intents,
-    help_command=None
-)
+bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 # ==== Data Management ====
 CACHE_FILE = "cache.json"
@@ -101,7 +107,6 @@ def save_cache():
         logger.error(f"Cache save error: {e}")
 
 def save_subreddits():
-    """Atomically save subreddit list to prevent corruption."""
     temp_file = SUB_FILE + ".tmp"
     with open(temp_file, "w") as f:
         json.dump(ALL_MEMES, f, indent=2)
@@ -120,20 +125,19 @@ async def fetch_random_meme(target):
             
             try:
                 async for post in subreddit.hot(limit=100):
-                    await asyncio.sleep(0)  # Yield to event loop (fixes asyncpraw timeout)
                     if (post.stickied or not post.url or post.id in posted_ids):
                         continue
                     if hasattr(target, 'is_nsfw') and not target.is_nsfw() and post.over_18:
                         continue
                     
                     clean_url = post.url.split('?')[0]
-                    if any(clean_url.lower().endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".gif", ".gifv")):
+                    if any(clean_url.lower().endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".gif")):
                         posts.append(post)
                         if len(posts) >= 15:
                             break
             
-            except (asyncio.TimeoutError, asyncpraw.exceptions.APIException):
-                logger.warning(f"Error fetching from r/{subreddit_name}")
+            except asyncio.TimeoutError:
+                logger.warning(f"Timeout fetching r/{subreddit_name}")
                 continue
             
             if posts:
@@ -160,14 +164,12 @@ def make_embed(post):
         title=post.title[:250],
         url=f"https://reddit.com{post.permalink}",
         color=random.randint(0, 0xFFFFFF),
-        timestamp=datetime.now(UTC)
+        timestamp=datetime.utcnow()
     )
-    
     if post.url.endswith(".gifv"):
         embed.set_image(url=post.url.replace(".gifv", ".gif"))
     else:
         embed.set_image(url=post.url)
-        
     embed.set_footer(
         text=f"👍 {post.score} | 💬 {post.num_comments} | r/{post.subreddit}",
         icon_url="https://www.redditstatic.com/desktop2x/img/favicon/favicon-32x32.png"
@@ -188,7 +190,6 @@ async def post_meme(ctx=None):
             await msg.add_reaction(UPVOTE)
             await msg.add_reaction(DOWNVOTE)
             meme_scores[msg.id] = {"score": 0, "embed": embed, "url": post.url}
-
             logger.info(f"Posted: r/{post.subreddit} - {post.title[:50]}...")
             return True
         logger.warning("Post failed: No suitable memes found")
@@ -202,16 +203,15 @@ async def post_meme(ctx=None):
 async def meme_scheduler():
     if not hasattr(bot, "next_post_minutes"):
         bot.next_post_minutes = random.uniform(POST_INTERVAL_MIN, POST_INTERVAL_MAX)
-        bot.last_post_time = datetime.now(UTC)
+        bot.last_post_time = datetime.utcnow()
         logger.info(f"Initialized scheduler. First post in {bot.next_post_minutes:.1f} minutes")
 
-    elapsed = (datetime.now(UTC) - bot.last_post_time).total_seconds() / 60
+    elapsed = (datetime.utcnow() - bot.last_post_time).total_seconds() / 60
     
     if elapsed >= bot.next_post_minutes and not getattr(bot, "paused", False):
         success = await post_meme()
-        
         if success:
-            bot.last_post_time = datetime.now(UTC)
+            bot.last_post_time = datetime.utcnow()
             bot.next_post_minutes = random.uniform(POST_INTERVAL_MIN, POST_INTERVAL_MAX)
             logger.info(f"Next post scheduled in {bot.next_post_minutes:.1f} minutes")
         else:
@@ -225,7 +225,7 @@ async def reset_meme_of_the_day():
     meme_scores.clear()
     logger.info("Meme of the Day has been reset!")
 
-# ==== Reaction Events with Lock ====
+# ==== Reaction Events ====
 score_lock = asyncio.Lock()
 
 @bot.event
@@ -247,8 +247,6 @@ async def on_reaction_add(reaction, user):
                     "embed": meme_scores[msg.id]["embed"]
                 })
 
-            logger.info(f"Vote added. MsgID: {msg.id}, Score: {meme_scores[msg.id]['score']}")
-
 @bot.event
 async def on_reaction_remove(reaction, user):
     if user.bot:
@@ -260,8 +258,6 @@ async def on_reaction_remove(reaction, user):
                 meme_scores[msg.id]["score"] -= 1
             elif str(reaction.emoji) == DOWNVOTE:
                 meme_scores[msg.id]["score"] += 1
-
-            logger.info(f"Vote removed. MsgID: {msg.id}, Score: {meme_scores[msg.id]['score']}")
 
 # ==== Commands ====
 @bot.command()
@@ -306,13 +302,13 @@ async def stats(ctx):
     
     if hasattr(bot, "last_post_time") and hasattr(bot, "next_post_minutes"):
         next_post = bot.last_post_time + timedelta(minutes=bot.next_post_minutes)
-        mins_left = max(0, int((next_post - datetime.now(UTC)).total_seconds() / 60))
+        mins_left = max(0, int((next_post - datetime.utcnow()).total_seconds() / 60))
         embed.add_field(name="Next Auto Post", value=f"In {mins_left} minutes", inline=False)
     
     embed.add_field(name="Subreddits", value="\n".join([f"• r/{sub}" for sub in ALL_MEMES]), inline=False)
     
     if hasattr(bot, "start_time"):
-        uptime = datetime.now(UTC) - bot.start_time
+        uptime = datetime.utcnow() - bot.start_time
         embed.add_field(name="Uptime", value=str(uptime).split(".")[0], inline=False)
         
     await ctx.send(embed=embed)
@@ -320,23 +316,20 @@ async def stats(ctx):
 # ==== Events ====
 @bot.event
 async def on_ready():
+    global reddit
+    bot.start_time = datetime.utcnow()
     logger.info(f"Logged in as {bot.user} (ID: {bot.user.id})")
-    bot.start_time = datetime.now(UTC)
+
+    # Initialize reddit once loop is alive
+    if reddit is None:
+        await init_reddit()
+
     load_cache()
-    
-    if len(posted_ids) > 500:
-        posted_ids.clear()
-        posted_queue.clear()
-        save_cache()
-        logger.info("Reset cache due to size")
-    
+
     if not meme_scheduler.is_running():
         meme_scheduler.start()
-        logger.info("Started meme scheduler")
-    
     if not reset_meme_of_the_day.is_running():
         reset_meme_of_the_day.start()
-        logger.info("Started Meme of the Day reset scheduler")
     
     await bot.change_presence(
         activity=discord.Activity(
@@ -356,10 +349,10 @@ async def on_command_error(ctx, error):
 
 # ==== Start Bot ====
 if __name__ == "__main__":
-    try:
-        keep_alive()
-        logger.info("Webserver started for keep-alive")
+    keep_alive()
+    logger.info("Webserver started for keep-alive")
 
+    try:
         token = os.environ['discordkey']
         bot.run(token)
     except KeyError:
@@ -367,12 +360,3 @@ if __name__ == "__main__":
         sys.exit(1)
     except Exception as e:
         logger.error(f"Fatal error: {e}", exc_info=True)
-    finally:
-        try:
-            loop = asyncio.get_event_loop()
-            if not loop.is_closed():
-                loop.run_until_complete(reddit.close())
-                logger.info("Reddit client closed")
-                loop.close()
-        except Exception as e:
-            logger.error(f"Error closing Reddit client: {e}", exc_info=True)
