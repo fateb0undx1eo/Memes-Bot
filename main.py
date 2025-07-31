@@ -257,7 +257,7 @@ async def on_command_error(ctx, error):
         logger.error(f"Command error: {error}", exc_info=True)
 
 # ==== Start Bot ====
-if _name_ == "_main_":
+if __name__ == "__main__":
     try:
         # Start keep-alive webserver
         keep_alive()
@@ -275,5 +275,7 @@ if _name_ == "_main_":
         logger.error(f"Fatal error: {e}", exc_info=True)
     finally:
         # Properly close resources
-        asyncio.run(reddit.close())
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(reddit.close())
         logger.info("Reddit client closed")
+        loop.close()
