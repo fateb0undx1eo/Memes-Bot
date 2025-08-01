@@ -11,10 +11,10 @@ class SelfEmotes(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-        # Primary command name -> aliases (include primary for simplicity)
+        # Primary command name -> aliases
         self.emote_types = {
             "blush": ["blush", "shy", "embarrassed"],
-            "smile": ["smile", "grin", "happy"],
+            "smile": ["smile", "grin"],
             "happy": ["happy", "joy", "excited"],
             "dance": ["dance", "dancing", "party"],
             "cry": ["cry", "crying", "sad", "tears"],
@@ -23,7 +23,7 @@ class SelfEmotes(commands.Cog):
 
         self.api_url = "https://api.waifu.pics"
 
-        # Automatically register all commands
+        # Automatically register all commands dynamically
         self.register_emote_commands()
 
     def register_emote_commands(self):
@@ -31,10 +31,10 @@ class SelfEmotes(commands.Cog):
         registered_names = set()
 
         for primary, aliases in self.emote_types.items():
-            # Remove duplicate aliases to avoid registration errors
+            # Remove duplicates across commands
             unique_aliases = [a for a in aliases if a not in registered_names]
             if not unique_aliases:
-                continue  # Skip if nothing unique left
+                continue
 
             command_name = unique_aliases[0]
             command_aliases = unique_aliases[1:]
@@ -42,12 +42,9 @@ class SelfEmotes(commands.Cog):
             async def dynamic_emote(ctx, emote=primary):
                 await self.handle_emote(ctx, emote)
 
-            # Avoid capturing late-binding variable in loop
-            dynamic_emote.__name__ = f"cmd_{primary}"
-
-            # Create the command dynamically
+            # Fix: use callback for discord.py 2.5.2
             cmd = commands.Command(
-                func=dynamic_emote,
+                callback=dynamic_emote,
                 name=command_name,
                 aliases=command_aliases
             )
