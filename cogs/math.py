@@ -43,3 +43,4 @@ class MathCog(commands.Cog):
 # Required setup function for discord.py 2.x
 async def setup(bot: commands.Bot):
     await bot.add_cog(MathCog(bot))
+
