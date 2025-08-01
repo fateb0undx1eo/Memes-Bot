@@ -4,22 +4,6 @@ from discord.ext import commands
 import random
 import math
 import typing
-import configparser
-import os
-
-# Load configuration from file
-config = configparser.ConfigParser()
-config.read('config.ini')
-
-# Get allowed channels from config with fallback
-try:
-    ALLOWED_CHANNELS = {
-        int(ch_id.strip()) 
-        for ch_id in config.get('MATH', 'allowed_channels', fallback='').split(',')
-        if ch_id.strip()
-    }
-except:
-    ALLOWED_CHANNELS = set()
 
 class MathCog(commands.Cog):
     def __init__(self, bot):
@@ -28,19 +12,8 @@ class MathCog(commands.Cog):
         self.max_decimals = 6      # Max decimal places to display
 
     async def ensure_allowed_channel(self, interaction: discord.Interaction) -> bool:
-        """Check if command is used in an allowed channel"""
-        if not ALLOWED_CHANNELS:  # No restriction if not configured
-            return True
-            
-        if interaction.channel_id in ALLOWED_CHANNELS:
-            return True
-            
-        channels = ', '.join(f'<#{ch_id}>' for ch_id in ALLOWED_CHANNELS)
-        await interaction.response.send_message(
-            f"🔢 Math commands are only available in: {channels}",
-            ephemeral=True
-        )
-        return False
+        """No channel restrictions anymore"""
+        return True
 
     def format_number(self, num: typing.Union[int, float]) -> str:
         """Format numbers intelligently for display"""
@@ -52,9 +25,6 @@ class MathCog(commands.Cog):
     @app_commands.command(name="add", description="Add multiple numbers together")
     @app_commands.describe(numbers="Numbers to add (space separated)")
     async def add(self, interaction: discord.Interaction, numbers: str):
-        if not await self.ensure_allowed_channel(interaction):
-            return
-            
         try:
             nums = [float(n) for n in numbers.split()]
             if not nums:
@@ -74,9 +44,6 @@ class MathCog(commands.Cog):
     @app_commands.command(name="multiply", description="Multiply multiple numbers")
     @app_commands.describe(numbers="Numbers to multiply (space separated)")
     async def multiply(self, interaction: discord.Interaction, numbers: str):
-        if not await self.ensure_allowed_channel(interaction):
-            return
-            
         try:
             nums = [float(n) for n in numbers.split()]
             if not nums:
@@ -100,9 +67,6 @@ class MathCog(commands.Cog):
     @app_commands.command(name="power", description="Raise a number to a power")
     @app_commands.describe(base="Base number", exponent="Exponent")
     async def power(self, interaction: discord.Interaction, base: float, exponent: float):
-        if not await self.ensure_allowed_channel(interaction):
-            return
-            
         try:
             result = base ** exponent
             await interaction.response.send_message(
@@ -117,9 +81,6 @@ class MathCog(commands.Cog):
     @app_commands.command(name="sqrt", description="Calculate square root of a number")
     @app_commands.describe(number="Number to find square root of")
     async def sqrt(self, interaction: discord.Interaction, number: float):
-        if not await self.ensure_allowed_channel(interaction):
-            return
-            
         if number < 0:
             await interaction.response.send_message(
                 "❌ Cannot calculate square root of negative numbers",
@@ -138,9 +99,6 @@ class MathCog(commands.Cog):
         base="Logarithm base (default: 10)"
     )
     async def log(self, interaction: discord.Interaction, number: float, base: float = 10):
-        if not await self.ensure_allowed_channel(interaction):
-            return
-            
         if number <= 0:
             await interaction.response.send_message(
                 "❌ Logarithm is only defined for positive numbers",
@@ -162,9 +120,6 @@ class MathCog(commands.Cog):
     @app_commands.command(name="factorial", description="Calculate factorial of a number")
     @app_commands.describe(number="Positive integer to calculate factorial of")
     async def factorial(self, interaction: discord.Interaction, number: int):
-        if not await self.ensure_allowed_channel(interaction):
-            return
-            
         if number < 0:
             await interaction.response.send_message(
                 "❌ Factorial is only defined for non-negative integers",
@@ -187,9 +142,6 @@ class MathCog(commands.Cog):
     @app_commands.command(name="quadratic", description="Solve quadratic equation: ax² + bx + c = 0")
     @app_commands.describe(a="Coefficient of x²", b="Coefficient of x", c="Constant term")
     async def quadratic(self, interaction: discord.Interaction, a: float, b: float, c: float):
-        if not await self.ensure_allowed_channel(interaction):
-            return
-            
         if a == 0:
             await interaction.response.send_message(
                 "❌ Coefficient 'a' cannot be zero (not quadratic)",
@@ -241,9 +193,6 @@ class MathCog(commands.Cog):
         integer: bool = False,
         count: app_commands.Range[int, 1, 25] = 1
     ):
-        if not await self.ensure_allowed_channel(interaction):
-            return
-            
         if low >= high:
             await interaction.response.send_message(
                 "❌ Lower bound must be less than upper bound",
@@ -297,9 +246,6 @@ class MathCog(commands.Cog):
         from_unit: app_commands.Choice[str],
         to_unit: app_commands.Choice[str]
     ):
-        if not await self.ensure_allowed_channel(interaction):
-            return
-            
         unit_map = {
             # Temperature
             ("c", "f"): lambda c: c * 9/5 + 32,
