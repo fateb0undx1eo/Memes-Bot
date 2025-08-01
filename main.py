@@ -12,6 +12,7 @@ from collections import deque
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 from webserver import keep_alive
+from discord import app_commands
 
 # ==== Python 3.13 Fix ====
 if sys.version_info >= (3, 13):
@@ -72,7 +73,7 @@ async def init_reddit():
         user_agent=os.environ['REDDIT_USER_AGENT'],
         timeout=15
     )
-    reddit.read_only = True  # ✅ FIXED
+    reddit.read_only = True
     logger.info("✅ Reddit client initialized in read-only mode")
 
 # ==== Bot Setup ====
@@ -149,26 +150,30 @@ async def fetch_random_meme(target):
 
 def make_embed(post):
     embed = discord.Embed(
-        title=post.title[:250],  # Meme title only
+        title=post.title[:250],
         color=random.randint(0, 0xFFFFFF)
     )
 
-    # Show the image (gifv handled)
     if post.url.endswith(".gifv"):
         embed.set_image(url=post.url.replace(".gifv", ".gif"))
     else:
         embed.set_image(url=post.url)
 
-    # Footer instructing voting + subreddit source
     embed.set_footer(
         text=f"From r/{post.subreddit} | React below to vote ⬆⬇"
     )
-
     return embed
 
-async def post_meme(ctx=None):
+async def post_meme(interaction: discord.Interaction = None, ctx: commands.Context = None):
     try:
-        target_channel = ctx.channel if ctx else bot.get_channel(MEME_CHANNEL_ID)
+        # Determine target channel
+        if interaction:
+            target_channel = interaction.channel
+        elif ctx:
+            target_channel = ctx.channel
+        else:
+            target_channel = bot.get_channel(MEME_CHANNEL_ID)
+        
         if not target_channel:
             logger.error("Meme channel not found!")
             return False
@@ -176,9 +181,21 @@ async def post_meme(ctx=None):
         post = await fetch_random_meme(target_channel)
         if post:
             embed = make_embed(post)
-            msg = await target_channel.send(embed=embed)
+            
+            # Send to appropriate context
+            if interaction:
+                await interaction.response.send_message(embed=embed)
+                msg = await interaction.original_response()
+            elif ctx:
+                msg = await ctx.send(embed=embed)
+            else:
+                msg = await target_channel.send(embed=embed)
+                
+            # Add reactions
             await msg.add_reaction(UPVOTE)
             await msg.add_reaction(DOWNVOTE)
+            
+            # Track meme
             meme_scores[msg.id] = {"score": 0, "embed": embed, "url": post.url}
             logger.info(f"Posted: r/{post.subreddit} - {post.title[:50]}...")
             return True
@@ -196,7 +213,7 @@ async def meme_scheduler():
 
     elapsed = (datetime.utcnow() - bot.last_post_time).total_seconds() / 60
     if elapsed >= bot.next_post_minutes and not getattr(bot, "paused", False):
-        success = await post_meme()
+        success = await post_meme()  # No context for scheduler
         if success:
             bot.last_post_time = datetime.utcnow()
             bot.next_post_minutes = random.uniform(POST_INTERVAL_MIN, POST_INTERVAL_MAX)
@@ -209,39 +226,108 @@ async def reset_meme_of_the_day():
     meme_of_the_day = {"score": 0, "post_id": None, "embed": None}
     meme_scores.clear()
 
-# ==== Commands ====
-@bot.command()
-@commands.cooldown(1, 30, commands.BucketType.user)
-async def meme(ctx):
-    await post_meme(ctx)
+# ==== Slash Commands ====
+@bot.tree.command(name="meme", description="Get a random meme")
+@app_commands.checks.cooldown(1, 30.0)
+async def slash_meme(interaction: discord.Interaction):
+    await post_meme(interaction=interaction)
 
-@bot.command()
-async def bestmeme(ctx):
+@bot.tree.command(name="bestmeme", description="Show today's highest-rated meme")
+async def slash_bestmeme(interaction: discord.Interaction):
     if meme_of_the_day["embed"]:
-        await ctx.send(f"🏆 Meme of the Day (Score: {meme_of_the_day['score']})", embed=meme_of_the_day["embed"])
+        await interaction.response.send_message(
+            f"🏆 Meme of the Day (Score: {meme_of_the_day['score']})",
+            embed=meme_of_the_day["embed"]
+        )
     else:
-        await ctx.send("😔 No meme of the day yet.")
+        await interaction.response.send_message("😔 No meme of the day yet.")
 
-@bot.command()
-async def stats(ctx):
+@bot.tree.command(name="stats", description="Show bot statistics")
+async def slash_stats(interaction: discord.Interaction):
     embed = discord.Embed(title="🤖 Meme Bot Stats", color=0x00FFAA)
     if hasattr(bot, "last_post_time") and hasattr(bot, "next_post_minutes"):
         next_post = bot.last_post_time + timedelta(minutes=bot.next_post_minutes)
         mins_left = max(0, int((next_post - datetime.utcnow()).total_seconds() / 60))
         embed.add_field(name="Next Auto Post", value=f"In {mins_left} minutes", inline=False)
     embed.add_field(name="Uptime", value=str(datetime.utcnow() - bot.start_time).split(".")[0], inline=False)
-    await ctx.send(embed=embed)
+    embed.add_field(name="Status", value="Paused ⏸️" if getattr(bot, "paused", False) else "Running ▶️", inline=False)
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="pause", description="Pause auto-posting (Admin only)")
+@app_commands.checks.has_permissions(manage_guild=True)
+async def slash_pause(interaction: discord.Interaction):
+    bot.paused = True
+    await interaction.response.send_message("⏸ Auto-posting paused.")
+
+@bot.tree.command(name="resume", description="Resume auto-posting (Admin only)")
+@app_commands.checks.has_permissions(manage_guild=True)
+async def slash_resume(interaction: discord.Interaction):
+    bot.paused = False
+    await interaction.response.send_message("▶ Auto-posting resumed.")
+
+subreddits_group = app_commands.Group(name="subreddits", description="Manage subreddit list")
+
+@subreddits_group.command(name="add", description="Add a subreddit to the list (Admin only)")
+@app_commands.describe(subreddit="Subreddit name (without r/)")
+@app_commands.checks.has_permissions(manage_guild=True)
+async def addsub(interaction: discord.Interaction, subreddit: str):
+    sub = subreddit.lower().strip()
+    if sub in ALL_MEMES:
+        await interaction.response.send_message(f"❌ r/{sub} is already in the list.", ephemeral=True)
+        return
+        
+    ALL_MEMES.append(sub)
+    with open(SUB_FILE, "w") as f:
+        json.dump(ALL_MEMES, f, indent=2)
+    await interaction.response.send_message(f"✅ Added r/{sub} to the list.", ephemeral=True)
+
+@subreddits_group.command(name="remove", description="Remove a subreddit from the list (Admin only)")
+@app_commands.describe(subreddit="Subreddit name (without r/)")
+@app_commands.checks.has_permissions(manage_guild=True)
+async def removesub(interaction: discord.Interaction, subreddit: str):
+    sub = subreddit.lower().strip()
+    if sub not in ALL_MEMES:
+        await interaction.response.send_message(f"❌ r/{sub} not found in the list.", ephemeral=True)
+        return
+        
+    ALL_MEMES.remove(sub)
+    with open(SUB_FILE, "w") as f:
+        json.dump(ALL_MEMES, f, indent=2)
+    await interaction.response.send_message(f"✅ Removed r/{sub} from the list.", ephemeral=True)
+
+@subreddits_group.command(name="list", description="Show current subreddit list")
+async def listsubs(interaction: discord.Interaction):
+    subs = "\n".join([f"• r/{sub}" for sub in ALL_MEMES])
+    embed = discord.Embed(
+        title=f"Subreddits ({len(ALL_MEMES)})",
+        description=subs,
+        color=0x3498DB
+    )
+    await interaction.response.send_message(embed=embed)
+
+# Add group to command tree
+bot.tree.add_command(subreddits_group)
 
 # ==== Events ====
 @bot.event
 async def on_ready():
     global reddit
     bot.start_time = datetime.utcnow()
+    bot.paused = False
     logger.info(f"Logged in as {bot.user} (ID: {bot.user.id})")
 
     if reddit is None:
         await init_reddit()
     load_cache()
+    
+    # Sync slash commands globally
+    try:
+        synced = await bot.tree.sync()
+        logger.info(f"Synced {len(synced)} slash commands")
+    except Exception as e:
+        logger.error(f"Command sync error: {e}")
+
+    # Start background tasks
     if not meme_scheduler.is_running():
         meme_scheduler.start()
     if not reset_meme_of_the_day.is_running():
@@ -252,11 +338,38 @@ async def on_ready():
     )
 
 @bot.event
+async def on_reaction_add(reaction, user):
+    if user.bot:
+        return
+        
+    msg_id = reaction.message.id
+    if msg_id not in meme_scores:
+        return
+        
+    emoji = str(reaction.emoji)
+    if emoji == UPVOTE:
+        meme_scores[msg_id]["score"] += 1
+    elif emoji == DOWNVOTE:
+        meme_scores[msg_id]["score"] -= 1
+        
+    # Update meme of the day
+    current_score = meme_scores[msg_id]["score"]
+    if current_score > meme_of_the_day["score"]:
+        meme_of_the_day["score"] = current_score
+        meme_of_the_day["post_id"] = msg_id
+        meme_of_the_day["embed"] = meme_scores[msg_id]["embed"]
+
+@bot.event
+async def on_reaction_remove(reaction, user):
+    await on_reaction_add(reaction, user)  # Same logic
+
+@bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandOnCooldown):
         await ctx.send(f"⏳ Cooldown active! Try again in {error.retry_after:.0f} seconds.")
     else:
         logger.error(f"Command error: {error}", exc_info=True)
+
 @bot.event
 async def on_message(message):
     # Ignore messages from the bot itself
