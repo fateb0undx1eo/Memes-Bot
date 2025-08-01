@@ -1,6 +1,6 @@
 import discord
 from discord.ext import commands
-import aiohttp, random
+import aiohttp, random, asyncio
 
 class SelfEmotes(commands.Cog):
     def __init__(self, bot):
@@ -14,12 +14,27 @@ class SelfEmotes(commands.Cog):
         base = "https://api.waifu.pics"
         category = "nsfw" if nsfw else "sfw"
         url = f"{base}/{category}/{action}"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    return data.get("url")
-        return None
+
+        for attempt in range(3):  # Retry up to 3 times
+            try:
+                timeout = aiohttp.ClientTimeout(total=10)  # 10 sec timeout
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.get(url) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            gif_url = data.get("url")
+                            if gif_url:
+                                return gif_url
+            except Exception as e:
+                print(f"Attempt {attempt+1} failed for {url}: {e}")
+            await asyncio.sleep(1)  # wait 1 sec before retry
+
+        # Optional fallback GIFs
+        fallback_gifs = [
+            "https://media.tenor.com/q4M8p0QQUCkAAAAC/anime-blush.gif",
+            "https://media.tenor.com/G1i1ny-H9HIAAAAC/anime-smile.gif"
+        ]
+        return random.choice(fallback_gifs)
 
     @commands.command(name="happy", aliases=[
         "awoo","smug","blush","smile","dance","wink","cringe","cry",
