@@ -2,119 +2,205 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import random
-from datetime import datetime
-from io import BytesIO
+import io
 from PIL import Image, ImageDraw, ImageFont
+import logging
+
+logger = logging.getLogger(__name__)
 
 class Capture(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self.font_cache = {}
+        self.max_lines = 50
+        self.max_line_length = 80
+        self.line_height = 20
+        self.padding = 15
 
-    async def create_text_screenshot(self, text: str, author: str) -> BytesIO:
-        """Creates a basic text screenshot for text-only messages."""
-        width, height = 800, 200
-        background_color = (30, 30, 30)
-        text_color = (255, 255, 255)
-
-        img = Image.new("RGB", (width, height), background_color)
-        draw = ImageDraw.Draw(img)
-
-        try:
-            font = ImageFont.truetype("arial.ttf", 32)
-        except:
-            font = ImageFont.load_default()
-
-        draw.text((20, 50), f"{author}:\n{text}", font=font, fill=text_color)
-
-        buffer = BytesIO()
-        img.save(buffer, format="PNG")
-        buffer.seek(0)
-        return buffer
-
-    async def repost_message(self, ctx, message: discord.Message):
-        """Handles reposting media or text screenshot."""
-        attachments = message.attachments
-        embed = discord.Embed(
-            description=f"Captured from {message.author.mention}",
-            color=random.randint(0, 0xFFFFFF),
-            timestamp=datetime.now()
-        )
-
-        if attachments:
-            # If media found, repost first image/video
-            attachment = attachments[0]
-            embed.set_image(url=attachment.url)
-            msg = await ctx.send(embed=embed)
-        else:
-            # If no media, screenshot the text content
-            if not message.content.strip():
-                await ctx.send("❌ No content to capture!")
-                return
-
-            buffer = await self.create_text_screenshot(message.content, message.author.display_name)
-            file = discord.File(buffer, filename="capture.png")
-            embed.set_image(url="attachment://capture.png")
-            msg = await ctx.send(embed=embed, file=file)
-
-        # Add meme voting reactions
-        await msg.add_reaction("<:49noice:1390641356397088919>")
-        await msg.add_reaction("<a:55emoji_76:1390673781743423540>")
-
-    # === Prefix command capture ===
-    @commands.command(name="capture", aliases=["scapture"])
-    async def capture_command(self, ctx):
-        """Capture a replied message or the previous message."""
-        message = None
-
-        # Prefer replied message
-        if ctx.message.reference:
-            message = await ctx.channel.fetch_message(ctx.message.reference.message_id)
-        else:
-            # Otherwise get the last non-bot message
-            async for msg in ctx.channel.history(limit=5):
-                if msg.id != ctx.message.id and not msg.author.bot:
-                    message = msg
+    # --- Improved text image creation ---
+    async def create_text_image(self, author_name: str, text: str) -> discord.File:
+        """Create an image with formatted text content"""
+        # Load/create font with better error handling
+        if not self.font_cache:
+            font_names = [
+                "DejaVuSansMono.ttf", 
+                "consola.ttf", 
+                "cour.ttf", 
+                "Courier_New.ttf"
+            ]
+            for name in font_names:
+                try:
+                    self.font_cache['mono'] = ImageFont.truetype(name, 14)
                     break
+                except IOError:
+                    continue
+            if 'mono' not in self.font_cache:
+                self.font_cache['mono'] = ImageFont.load_default()
+                logger.warning("Using fallback font for text rendering")
 
-        if not message:
-            await ctx.send("❌ No message to capture!")
+        font = self.font_cache['mono']
+        
+        # Process and wrap text
+        lines = []
+        for line in text.replace('\t', '    ').splitlines():
+            while line:
+                # Preserve leading spaces for code blocks
+                if len(line) > self.max_line_length:
+                    # Find last space within max length
+                    split_index = line.rfind(' ', 0, self.max_line_length)
+                    if split_index <= 0:
+                        split_index = self.max_line_length
+                    lines.append(line[:split_index])
+                    line = line[split_index:].lstrip()
+                else:
+                    lines.append(line)
+                    break
+                if len(lines) >= self.max_lines:
+                    break
+            if len(lines) >= self.max_lines:
+                break
+
+        # Truncate if too many lines
+        if len(lines) >= self.max_lines:
+            lines = lines[:self.max_lines]
+            lines[-1] = lines[-1][:77] + "..." if len(lines[-1]) > 77 else lines[-1] + "..."
+
+        # Calculate image dimensions
+        header = f"{author_name} said:"
+        width = 800
+        height = (self.padding * 2) + self.line_height + (len(lines) * self.line_height)
+
+        # Create image
+        img = Image.new("RGB", (width, height), (255, 255, 255))
+        draw = ImageDraw.Draw(img)
+        y = self.padding
+        
+        # Draw header
+        draw.text((self.padding, y), header, font=font, fill=(0, 0, 0))
+        y += self.line_height
+        
+        # Draw content lines
+        for line in lines:
+            draw.text((self.padding, y), line, font=font, fill=(0, 0, 0))
+            y += self.line_height
+
+        # Save to byte stream
+        buf = io.BytesIO()
+        img.save(buf, format='PNG')
+        buf.seek(0)
+        return discord.File(buf, filename="capture.png")
+
+    # --- Unified message reposting ---
+    async def repost_message(self, ctx_or_interaction, target_message: discord.Message):
+        """Handle message reposting for both command types"""
+        # Create embed with consistent styling
+        embed = discord.Embed(
+            description=f"📸 Captured from {target_message.author.mention}",
+            color=random.randint(0, 0xFFFFFF),
+            timestamp=target_message.created_at
+        )
+        embed.set_footer(text=f"In #{target_message.channel.name}")
+
+        file = None
+        should_upload = False
+
+        # Handle different content types
+        if target_message.attachments:
+            # Use first image if available
+            for att in target_message.attachments:
+                if att.content_type and att.content_type.startswith('image/'):
+                    embed.set_image(url=att.url)
+                    break
+            # Fallback to text if no images
+            if not embed.image and target_message.content:
+                should_upload = True
+        elif target_message.content:
+            should_upload = True
+
+        # Create text image if needed
+        if should_upload:
+            try:
+                file = await self.create_text_image(
+                    target_message.author.display_name,
+                    target_message.content
+                )
+                embed.set_image(url="attachment://capture.png")
+            except Exception as e:
+                logger.error(f"Image creation failed: {e}")
+
+        # Handle no content case
+        if not embed.image and not file:
+            error_msg = "❌ Nothing to capture (no text/images)"
+            if isinstance(ctx_or_interaction, commands.Context):
+                await ctx_or_interaction.send(error_msg, delete_after=10)
+            else:
+                await ctx_or_interaction.response.send_message(error_msg, ephemeral=True)
             return
 
-        await self.repost_message(ctx, message)
+        # Send response
+        try:
+            if isinstance(ctx_or_interaction, commands.Context):
+                await ctx_or_interaction.send(embed=embed, file=file)
+            else:
+                await ctx_or_interaction.response.send_message(embed=embed, file=file)
+        except discord.HTTPException as e:
+            logger.error(f"Failed to send message: {e}")
 
-    # === Slash command capture ===
-    @app_commands.command(name="scapture", description="Capture a replied message as media or screenshot")
-    async def slash_capture(self, interaction: discord.Interaction):
-        message = None
+    # --- Prefix Command ---
+    @commands.command(name="capture", aliases=["cap", "snap"])
+    async def capture_prefix(self, ctx: commands.Context):
+        """Capture replied message or recent message"""
+        # Check message reference first
+        if ctx.message.reference and ctx.message.reference.resolved:
+            if isinstance(ctx.message.reference.resolved, discord.Message):
+                target_message = ctx.message.reference.resolved
+            else:
+                target_message = None
+        else:
+            # Search recent messages
+            target_message = None
+            async for msg in ctx.channel.history(limit=10):
+                if not msg.author.bot and msg.id != ctx.message.id:
+                    target_message = msg
+                    break
 
-        # Fetch the referenced message if the command is used as a reply
-        if interaction.message and interaction.message.reference:
+        if not target_message:
+            await ctx.send("❌ No recent message found", delete_after=10)
             try:
-                message = await interaction.channel.fetch_message(interaction.message.reference.message_id)
+                await ctx.message.delete(delay=3)
             except:
                 pass
+            return
 
+        await self.repost_message(ctx, target_message)
+        try:
+            await ctx.message.delete(delay=3)
+        except discord.Forbidden:
+            pass
+
+    # --- Slash Command ---
+    @app_commands.command(name="capture", description="Capture a message/media and repost as the bot")
+    @app_commands.describe(message="Message to capture (leave blank for most recent)")
+    async def capture_slash(
+        self, 
+        interaction: discord.Interaction,
+        message: discord.Message = None
+    ):
+        """Slash command version with message option"""
+        await interaction.response.defer()
+        
         if not message:
-            # fallback to previous non-bot message
-            async for msg in interaction.channel.history(limit=5):
+            # Find recent non-bot message
+            async for msg in interaction.channel.history(limit=10):
                 if not msg.author.bot:
                     message = msg
                     break
 
         if not message:
-            await interaction.response.send_message("❌ No message to capture!", ephemeral=True)
+            await interaction.followup.send("❌ No message found to capture", ephemeral=True)
             return
 
-        await interaction.response.defer()
-        # Create a fake ctx object to reuse repost logic
-        class FakeCtx:
-            def __init__(self, interaction):
-                self.channel = interaction.channel
-                self.send = interaction.followup.send
-        fake_ctx = FakeCtx(interaction)
-
-        await self.repost_message(fake_ctx, message)
-
+        await self.repost_message(interaction, message)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Capture(bot))
