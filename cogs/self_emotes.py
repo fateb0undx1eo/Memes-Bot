@@ -1,100 +1,65 @@
 import discord
 from discord.ext import commands
 import aiohttp
-import asyncio
 import random
 import logging
+import functools
 
 logger = logging.getLogger('MemeBot.SelfEmotes')
 
 class SelfEmotes(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-
-        # Primary command name -> aliases
-        self.emote_types = {
-            "blush": ["blush", "shy", "embarrassed"],
-            "smile": ["smile", "grin"],
-            "happy": ["happy", "joy", "excited"],
-            "dance": ["dance", "dancing", "party"],
-            "cry": ["cry", "crying", "sad", "tears"],
-            "wink": ["wink", "flirt", "tease"]
-        }
-
         self.api_url = "https://api.waifu.pics"
 
-        # Automatically register all commands dynamically
-        self.register_emote_commands()
+        # emote name -> aliases
+        self.emote_types = {
+            "blush": ["shy", "embarrassed"],
+            "smile": ["grin", "happy"],
+            "dance": ["dancing", "party"],
+            "happy": ["joy", "excited"],
+            "cry": ["crying", "sad", "tears"],
+            "wink": ["flirt", "tease"]
+        }
 
-    def register_emote_commands(self):
-        """Automatically create commands for all emote types, avoiding duplicates."""
-        registered_names = set()
-
-        for primary, aliases in self.emote_types.items():
-            # Remove duplicates across commands
-            unique_aliases = [a for a in aliases if a not in registered_names]
-            if not unique_aliases:
-                continue
-
-            command_name = unique_aliases[0]
-            command_aliases = unique_aliases[1:]
-
-            async def dynamic_emote(ctx, emote=primary):
-                await self.handle_emote(ctx, emote)
-
-            # Fix: use callback for discord.py 2.5.2
-            cmd = commands.Command(
-                callback=dynamic_emote,
-                name=command_name,
-                aliases=command_aliases
-            )
-
-            # Register the command to the bot
-            try:
-                self.bot.add_command(cmd)
-                registered_names.update(unique_aliases)
-                logger.info(f"✅ Registered self-emote command: {command_name} (aliases: {command_aliases})")
-            except commands.errors.CommandRegistrationError as e:
-                logger.warning(f"⚠️ Skipped duplicate command: {command_name} ({str(e)})")
+        # Dynamically add commands to the bot
+        for emote, aliases in self.emote_types.items():
+            command_func = functools.partial(self.handle_emote, emote_type=emote)
+            command_func.__name__ = f"cmd_{emote}"
+            self.bot.add_command(commands.Command(command_func, name=emote, aliases=aliases))
 
     async def fetch_waifu_gif(self, action: str, nsfw: bool = False):
-        """Fetch a waifu GIF URL from waifu.pics with proper error handling"""
-        try:
-            category = "nsfw" if nsfw else "sfw"
-            url = f"{self.api_url}/{category}/{action}"
+        """Fetch a waifu GIF URL from waifu.pics"""
+        category = "nsfw" if nsfw else "sfw"
+        url = f"{self.api_url}/{category}/{action}"
 
+        try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, timeout=5) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         return data.get("url")
                     logger.warning(f"Waifu API error: Status {resp.status}")
-        except aiohttp.ClientError as e:
-            logger.error(f"HTTP error fetching GIF: {str(e)}")
-        except asyncio.TimeoutError:
-            logger.warning("Waifu API request timed out")
+        except Exception as e:
+            logger.error(f"GIF fetch error: {e}")
         return None
 
-    async def handle_emote(self, ctx, emote_type):
-        """Handle all emote commands with GIF fetching and error handling"""
-        try:
-            gif_url = await self.fetch_waifu_gif(
-                emote_type,
-                nsfw=ctx.channel.is_nsfw() if hasattr(ctx.channel, 'is_nsfw') else False
-            )
+    async def handle_emote(self, ctx, emote_type: str):
+        """Handle all emote commands dynamically"""
+        gif_url = await self.fetch_waifu_gif(
+            emote_type, 
+            nsfw=getattr(ctx.channel, 'is_nsfw', lambda: False)()
+        )
 
-            if gif_url:
-                embed = discord.Embed(
-                    description=f"{ctx.author.mention} is **{emote_type}**!",
-                    color=random.randint(0, 0xFFFFFF)
-                )
-                embed.set_image(url=gif_url)
-                await ctx.send(embed=embed)
-            else:
-                await ctx.send("😢 Couldn't fetch a GIF right now. Try again later!")
-        except Exception as e:
-            logger.error(f"Error in {emote_type} command: {str(e)}")
-            await ctx.send("⚠️ Something went wrong with that command!")
+        if gif_url:
+            embed = discord.Embed(
+                description=f"{ctx.author.mention} is **{emote_type}**!",
+                color=random.randint(0, 0xFFFFFF)
+            )
+            embed.set_image(url=gif_url)
+            await ctx.send(embed=embed)
+        else:
+            await ctx.send("😢 Couldn't fetch a GIF right now. Try again later!")
 
 async def setup(bot):
     await bot.add_cog(SelfEmotes(bot))
