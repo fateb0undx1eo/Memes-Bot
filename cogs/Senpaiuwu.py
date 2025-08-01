@@ -1,62 +1,67 @@
 import discord
 from discord.ext import commands
-import random
 import re
+import asyncio
+import random
 
 class SenpaiUwU(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self.cooldowns = {}
 
     def owoify(self, text: str) -> str:
-        """Basic OwO/UwU text transformation."""
-        # Replace 'r' and 'l' with 'w'
+        """Basic OwOify text transformation."""
+        # Replace common letters
         text = re.sub(r'[rl]', 'w', text)
         text = re.sub(r'[RL]', 'W', text)
-        
-        # Add some faces randomly
-        faces = ["UwU", "OwO", ">w<", "^w^", "(* ^ ω ^)", "(o´∀`o)", "(✿oωo)"]
-        text += " " + random.choice(faces)
-        
+
+        # Add random faces occasionally
+        faces = ['OwO', 'UwU', '>w<', '^w^', '(* ^ ω ^)', '(◕‿◕✿)']
+        if random.random() < 0.3:
+            text += " " + random.choice(faces)
+
+        # Replace n+vowels with ny+vowel
+        text = re.sub(r'n([aeiou])', r'ny\1', text)
+        text = re.sub(r'N([aeiouAEIOU])', r'Ny\1', text)
         return text
 
     @commands.command(
         name="uwu",
-        aliases=["owo", "owoify", "ify"],
-        help="OwOify your text or the previous message. Example: s!uwu Hello"
+        aliases=["owoify", "ify", "uwuify", "owo"]
     )
-    @commands.cooldown(1, 7, commands.BucketType.user)  # 7 sec cooldown per user
-    async def uwu_command(self, ctx: commands.Context, *, text: str = None):
-        # If no text, try previous message
-        if not text:
-            # Fetch the last non-bot message before this one
+    async def uwuify_command(self, ctx, *, text: str = None):
+        user_id = ctx.author.id
+
+        # --- 7 sec cooldown per user ---
+        now = asyncio.get_event_loop().time()
+        last_used = self.cooldowns.get(user_id, 0)
+        if now - last_used < 7:
+            retry_after = 7 - int(now - last_used)
+            await ctx.send(f"⏳ Wait {retry_after}s before uwuifying again!")
+            return
+        self.cooldowns[user_id] = now
+
+        # If no text, fetch the previous message in channel
+        if text is None:
             async for msg in ctx.channel.history(limit=2):
                 if msg.id != ctx.message.id and not msg.author.bot:
                     text = msg.content
                     break
+            if text is None or text.strip() == "":
+                await ctx.send("❌ Nothing to uwuify, baka!")
+                return
 
-        if not text:
-            await ctx.send("❌ No message to UwUify! Please provide text or send after a message.")
-            return
-
-        # UwUify the text
         uwu_text = self.owoify(text)
-        
-        # Create an embed with random color
+        # Avoid pinging people
+        uwu_text = re.sub(r"<@!?\d+>", "@someone", uwu_text)
+
+        # Send in an embed with random color
         embed = discord.Embed(
-            title="✨ Senpai UwU ✨",
             description=uwu_text,
             color=random.randint(0, 0xFFFFFF)
         )
-        embed.set_footer(text=f"Requested by {ctx.author.display_name}")
-
+        embed.set_author(name=f"{ctx.author.display_name} says:")
         await ctx.send(embed=embed)
 
-    # Handle cooldown error
-    @uwu_command.error
-    async def uwu_command_error(self, ctx, error):
-        if isinstance(error, commands.CommandOnCooldown):
-            await ctx.send(f"⏳ Wait {error.retry_after:.1f}s before UwUifying again!", delete_after=5)
-
-# Required setup function for discord.py 2.x
 async def setup(bot: commands.Bot):
     await bot.add_cog(SenpaiUwU(bot))
