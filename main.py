@@ -35,6 +35,11 @@ logger = logging.getLogger('MemeBot')
 os.makedirs("data", exist_ok=True)
 os.makedirs("cogs", exist_ok=True)
 
+# Create __init__.py in cogs directory if missing
+COGS_DIR = "cogs"
+if not os.path.exists(os.path.join(COGS_DIR, "__init__.py")):
+    open(os.path.join(COGS_DIR, "__init__.py"), 'a').close()
+
 SUB_FILE = "subreddits.json"
 DEFAULT_SUBS = [
     "memes", "dankmemes", "funny", "me_irl",
@@ -51,21 +56,15 @@ else:
     with open(SUB_FILE, "w") as f:
         json.dump(ALL_MEMES, f, indent=2)
 
-# Create responses.json if missing
 RESPONSES_FILE = "data/responses.json"
 if not os.path.exists(RESPONSES_FILE):
-    with open(RESPONSES_FILE, "w", encoding="utf-8") as f:
-        json.dump({
-            "roast": ["You're slower than dial-up internet!"],
-            "compliment": ["You light up the server!"],
-            "flirt": ["Are you Wi-Fi? Because I'm feeling a connection."]
-        }, f, indent=2)
+    with open(RESPONSES_FILE, "w") as f:
+        json.dump({}, f)
 
 MEME_CHANNEL_ID = int(os.environ.get('MEMES_CHANNEL_ID', 0))
 POST_INTERVAL_MIN = 5
 POST_INTERVAL_MAX = 10
 CACHE_SIZE = 1000
-COGS_DIR = "cogs"
 
 UPVOTE = "<:49noice:1390641356397088919>"
 DOWNVOTE = "<a:55emoji_76:1390673781743423540>"
@@ -93,23 +92,14 @@ intents.reactions = True
 intents.members = True
 intents.guilds = True
 
-def get_prefix(bot, message):
-    return ["s!", "senpai "]  # ✅ Fixed prefix
+bot = commands.Bot(
+    command_prefix=["s!", "senpai "],
+    intents=intents,
+    help_command=None
+)
 
-bot = commands.Bot(command_prefix=get_prefix, intents=intents, help_command=None)
-
-class BotConfig:
-    def __init__(self):
-        self.meme_channel_id = MEME_CHANNEL_ID
-        self.post_intervals = (POST_INTERVAL_MIN, POST_INTERVAL_MAX)
-        self.upvote_emoji = UPVOTE
-        self.downvote_emoji = DOWNVOTE
-        self.subreddits = ALL_MEMES
-        self.cache_file = "cache.json"
-
-bot.shared_config = BotConfig()
-
-CACHE_FILE = bot.shared_config.cache_file
+# ==== Cache ====
+CACHE_FILE = "cache.json"
 posted_ids = set()
 posted_queue = deque(maxlen=CACHE_SIZE)
 
@@ -133,13 +123,11 @@ def save_cache():
     except Exception as e:
         logger.error(f"Cache save error: {e}")
 
-# ==== Core Meme Functions ====
+# ==== Meme Functions ====
 async def fetch_random_meme(target):
     try:
-        max_attempts = 5
-        for attempt in range(max_attempts):
+        for _ in range(5):
             subreddit_name = random.choice(ALL_MEMES)
-            logger.info(f"Attempt {attempt+1}: Fetching from r/{subreddit_name}")
             subreddit = await reddit.subreddit(subreddit_name)
             posts = []
 
@@ -150,7 +138,7 @@ async def fetch_random_meme(target):
                     continue
 
                 clean_url = post.url.split('?')[0]
-                if any(clean_url.lower().endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".gif")):
+                if clean_url.lower().endswith((".jpg", ".jpeg", ".png", ".gif")):
                     posts.append(post)
                     if len(posts) >= 15:
                         break
@@ -160,13 +148,12 @@ async def fetch_random_meme(target):
                 if len(posted_queue) == CACHE_SIZE:
                     oldest_id = posted_queue.popleft()
                     posted_ids.remove(oldest_id)
-
                 posted_queue.append(post.id)
                 posted_ids.add(post.id)
                 save_cache()
                 return post
 
-        logger.warning("No suitable memes found after multiple attempts")
+        logger.warning("No suitable memes found.")
         return None
 
     except Exception as e:
@@ -179,46 +166,42 @@ def make_embed(post):
         color=random.randint(0, 0xFFFFFF)
     )
     embed.set_image(url=post.url.replace(".gifv", ".gif") if post.url.endswith(".gifv") else post.url)
-    embed.set_footer(text=f"From r/{post.subreddit} | React below to vote ⬆⬇")
+    embed.set_footer(text=f"From r/{post.subreddit} | React to vote ⬆⬇")
     return embed
 
 async def post_meme(interaction=None, ctx=None):
-    try:
-        if interaction:
-            target_channel = interaction.channel
-        elif ctx:
-            target_channel = ctx.channel
+    target_channel = (
+        interaction.channel if interaction else
+        ctx.channel if ctx else
+        bot.get_channel(MEME_CHANNEL_ID)
+    )
+    if not target_channel:
+        logger.error("No target channel for meme post.")
+        return False
+
+    post = await fetch_random_meme(target_channel)
+    if not post:
+        return False
+
+    embed = make_embed(post)
+    msg = None
+
+    if interaction:
+        if interaction.response.is_done():
+            msg = await interaction.followup.send(embed=embed)
         else:
-            target_channel = bot.get_channel(MEME_CHANNEL_ID)
-
-        if not target_channel:
-            logger.error("Meme channel not found!")
-            return False
-
-        post = await fetch_random_meme(target_channel)
-        if not post:
-            return False
-
-        embed = make_embed(post)
-
-        if interaction:
             await interaction.response.send_message(embed=embed)
             msg = await interaction.original_response()
-        elif ctx:
-            msg = await ctx.send(embed=embed)
-        else:
-            msg = await target_channel.send(embed=embed)
+    elif ctx:
+        msg = await ctx.send(embed=embed)
+    else:
+        msg = await target_channel.send(embed=embed)
 
-        await msg.add_reaction(UPVOTE)
-        await msg.add_reaction(DOWNVOTE)
+    await msg.add_reaction(UPVOTE)
+    await msg.add_reaction(DOWNVOTE)
 
-        meme_scores[msg.id] = {"score": 0, "embed": embed, "url": post.url}
-        logger.info(f"Posted: r/{post.subreddit} - {post.title[:50]}...")
-        return True
-
-    except Exception as e:
-        logger.error(f"Posting failed: {e}", exc_info=True)
-        return False
+    meme_scores[msg.id] = {"score": 0, "embed": embed, "url": post.url}
+    return True
 
 # ==== Scheduler Tasks ====
 @tasks.loop(minutes=1.0)
@@ -230,11 +213,8 @@ async def meme_scheduler():
     elapsed = (datetime.now(timezone.utc) - bot.last_post_time).total_seconds() / 60
     if elapsed >= bot.next_post_minutes and not getattr(bot, "paused", False):
         success = await post_meme()
-        if success:
-            bot.last_post_time = datetime.now(timezone.utc)
-            bot.next_post_minutes = random.uniform(POST_INTERVAL_MIN, POST_INTERVAL_MAX)
-        else:
-            bot.next_post_minutes = random.uniform(1, 3)
+        bot.last_post_time = datetime.now(timezone.utc)
+        bot.next_post_minutes = random.uniform(POST_INTERVAL_MIN, POST_INTERVAL_MAX if success else 3)
 
 @tasks.loop(hours=24)
 async def reset_meme_of_the_day():
@@ -242,41 +222,64 @@ async def reset_meme_of_the_day():
     meme_of_the_day = {"score": 0, "post_id": None, "embed": None}
     meme_scores.clear()
 
-# ==== Events ====
-@bot.event
-async def on_ready():
-    global reddit
-    bot.start_time = datetime.now(timezone.utc)
-    bot.paused = False
-    logger.info(f"Logged in as {bot.user} (ID: {bot.user.id})")
+# ==== Slash Commands ====
+@bot.tree.command(name="meme", description="Get a random meme")
+async def slash_meme(interaction: discord.Interaction):
+    await post_meme(interaction=interaction)
 
-    if reddit is None:
-        await init_reddit()
+@bot.tree.command(name="bestmeme", description="Show today's highest-rated meme")
+async def slash_bestmeme(interaction: discord.Interaction):
+    if meme_of_the_day["embed"]:
+        await interaction.response.send_message(
+            f"🏆 Meme of the Day (Score: {meme_of_the_day['score']})",
+            embed=meme_of_the_day["embed"]
+        )
+    else:
+        await interaction.response.send_message("😔 No meme of the day yet.")
 
-    load_cache()
+@bot.tree.command(name="stats", description="Show bot statistics")
+async def slash_stats(interaction: discord.Interaction):
+    await interaction.response.defer()
+    embed = discord.Embed(title="🤖 Meme Bot Stats", color=0x00FFAA)
+    uptime = datetime.now(timezone.utc) - bot.start_time
+    embed.add_field(name="Uptime", value=str(uptime).split(".")[0], inline=False)
+    embed.add_field(name="Status", value="Paused ⏸️" if getattr(bot, "paused", False) else "Running ▶️", inline=False)
+    embed.add_field(name="Loaded Cogs", value=f"{len(bot.cogs)}: {', '.join(bot.cogs)}", inline=False)
+    await interaction.followup.send(embed=embed)
 
-    # Load cogs
-    loaded_cogs = []
+# ==== Cog Loader ====
+async def load_all_cogs():
     for filename in os.listdir(COGS_DIR):
         if filename.endswith(".py") and not filename.startswith("_"):
             cog_name = filename[:-3]
             full_path = f"{COGS_DIR}.{cog_name}"
             try:
                 await bot.load_extension(full_path)
-                loaded_cogs.append(cog_name)
                 logger.info(f"✅ Loaded cog: {cog_name}")
             except Exception as e:
                 logger.error(f"❌ Failed to load cog {cog_name}: {e}", exc_info=True)
 
-    logger.info(f"Total cogs loaded: {len(loaded_cogs)}")
+# ==== Events ====
+@bot.event
+async def on_ready():
+    bot.start_time = datetime.now(timezone.utc)
+    bot.paused = False
+    logger.info(f"Logged in as {bot.user} (ID: {bot.user.id})")
 
-    await asyncio.sleep(5)
-    try:
-        synced = await bot.tree.sync()
-        logger.info(f"✅ Synced {len(synced)} slash commands")
-    except Exception as e:
-        logger.error(f"❌ Command sync error: {e}", exc_info=True)
+    if reddit is None:
+        await init_reddit()
+    load_cache()
 
+    # Sync commands only once
+    if not hasattr(bot, "synced_commands"):
+        try:
+            synced = await bot.tree.sync()
+            logger.info(f"✅ Synced {len(synced)} slash commands")
+            bot.synced_commands = True
+        except Exception as e:
+            logger.error(f"❌ Command sync error: {e}")
+
+    # Start tasks only once
     if not meme_scheduler.is_running():
         meme_scheduler.start()
     if not reset_meme_of_the_day.is_running():
@@ -285,18 +288,9 @@ async def on_ready():
     await bot.change_presence(
         activity=discord.Activity(
             type=discord.ActivityType.watching,
-            name=f"memes & {len(loaded_cogs)} cogs"
+            name=f"memes & {len(bot.cogs)} cogs"
         )
     )
-
-@bot.event
-async def on_command_error(ctx, error):
-    if isinstance(error, commands.CommandOnCooldown):
-        await ctx.send(f"⏳ Cooldown active! Try again in {error.retry_after:.0f} seconds.")
-    elif isinstance(error, commands.CommandNotFound):
-        return  # Ignore unknown commands
-    else:
-        logger.error(f"Command error: {error}", exc_info=True)
 
 @bot.event
 async def on_message(message):
@@ -304,10 +298,12 @@ async def on_message(message):
         return
     await bot.process_commands(message)
 
-# ==== Main Entry Point ====
+# ==== Main ====
 async def main():
+    # Load cogs before starting bot
+    await load_all_cogs()
     async with bot:
-        await bot.start(os.environ['discordkey'])
+        await bot.start(os.environ['DISCORD_TOKEN'])
 
 if __name__ == "__main__":
     keep_alive()
