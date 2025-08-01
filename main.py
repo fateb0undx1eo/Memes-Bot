@@ -52,6 +52,7 @@ MEME_CHANNEL_ID = int(os.environ.get('MEMES_CHANNEL_ID', 0))
 POST_INTERVAL_MIN = 5
 POST_INTERVAL_MAX = 10
 CACHE_SIZE = 1000
+COGS_DIR = "cogs"  # Cog directory path
 
 # Custom reaction emojis
 UPVOTE = "<:49noice:1390641356397088919>"
@@ -80,10 +81,31 @@ async def init_reddit():
 intents = discord.Intents.default()
 intents.message_content = True
 intents.reactions = True
-bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
+intents.members = True  # Needed for user info in cogs
+intents.guilds = True   # Needed for server info in cogs
+
+bot = commands.Bot(
+    command_prefix=["s!", "senpai "], 
+    intents=intents, 
+    help_command=None
+)
+
+# ==== Shared Configuration ====
+class BotConfig:
+    """Central configuration accessible to all cogs"""
+    def __init__(self):
+        self.meme_channel_id = MEME_CHANNEL_ID
+        self.post_intervals = (POST_INTERVAL_MIN, POST_INTERVAL_MAX)
+        self.upvote_emoji = UPVOTE
+        self.downvote_emoji = DOWNVOTE
+        self.subreddits = ALL_MEMES
+        self.cache_file = "cache.json"
+
+# Attach to bot instance
+bot.shared_config = BotConfig()
 
 # ==== Data Management ====
-CACHE_FILE = "cache.json"
+CACHE_FILE = bot.shared_config.cache_file
 posted_ids = set()
 posted_queue = deque(maxlen=CACHE_SIZE)
 
@@ -251,6 +273,12 @@ async def slash_stats(interaction: discord.Interaction):
         embed.add_field(name="Next Auto Post", value=f"In {mins_left} minutes", inline=False)
     embed.add_field(name="Uptime", value=str(datetime.utcnow() - bot.start_time).split(".")[0], inline=False)
     embed.add_field(name="Status", value="Paused ⏸️" if getattr(bot, "paused", False) else "Running ▶️", inline=False)
+    
+    # Show cog stats
+    cog_count = len(bot.cogs)
+    cog_names = ", ".join(bot.cogs.keys()) if cog_count > 0 else "None"
+    embed.add_field(name="Loaded Cogs", value=f"{cog_count} cogs: {cog_names}", inline=False)
+    
     await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="pause", description="Pause auto-posting (Admin only)")
@@ -308,6 +336,33 @@ async def listsubs(interaction: discord.Interaction):
 # Add group to command tree
 bot.tree.add_command(subreddits_group)
 
+# ==== Cog Management ====
+def setup_cog_directory():
+    """Ensure cog directory exists with necessary files"""
+    os.makedirs(COGS_DIR, exist_ok=True)
+    
+    # Create __init__.py if missing
+    init_file = os.path.join(COGS_DIR, "__init__.py")
+    if not os.path.exists(init_file):
+        with open(init_file, "w") as f:
+            f.write("# Cog package initializer\n")
+    
+    logger.info(f"Cog directory setup: {COGS_DIR}")
+
+async def load_all_cogs():
+    """Dynamically load all cogs in directory"""
+    loaded_cogs = []
+    for filename in os.listdir(COGS_DIR):
+        if filename.endswith(".py") and not filename.startswith("_"):
+            cog_name = filename[:-3]  # Remove .py extension
+            try:
+                await bot.load_extension(f"{COGS_DIR}.{cog_name}")
+                loaded_cogs.append(cog_name)
+                logger.info(f"✅ Loaded cog: {cog_name}")
+            except Exception as e:
+                logger.error(f"❌ Failed to load cog '{cog_name}': {str(e)}")
+    return loaded_cogs
+
 # ==== Events ====
 @bot.event
 async def on_ready():
@@ -319,6 +374,11 @@ async def on_ready():
     if reddit is None:
         await init_reddit()
     load_cache()
+    
+    # Setup and load cogs
+    setup_cog_directory()
+    loaded_cogs = await load_all_cogs()
+    logger.info(f"Loaded {len(loaded_cogs)} cogs: {', '.join(loaded_cogs)}")
     
     # Sync slash commands globally
     try:
@@ -334,7 +394,10 @@ async def on_ready():
         reset_meme_of_the_day.start()
     
     await bot.change_presence(
-        activity=discord.Activity(type=discord.ActivityType.watching, name=f"for memes in {len(ALL_MEMES)} subs")
+        activity=discord.Activity(
+            type=discord.ActivityType.watching, 
+            name=f"memes & {len(bot.cogs)} cogs"
+        )
     )
 
 @bot.event
@@ -367,6 +430,8 @@ async def on_reaction_remove(reaction, user):
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandOnCooldown):
         await ctx.send(f"⏳ Cooldown active! Try again in {error.retry_after:.0f} seconds.")
+    elif isinstance(error, commands.ExtensionError):
+        await ctx.send(f"⚠️ Cog error: {error.original}")
     else:
         logger.error(f"Command error: {error}", exc_info=True)
 
@@ -404,9 +469,15 @@ async def on_message(message):
 
     # Important: Process normal commands after our event
     await bot.process_commands(message)
-    
+
+# ==== Main Entry Point ====
+async def main():
+    """Async main function to start the bot"""
+    async with bot:
+        await bot.start(os.environ['discordkey'])
+
 # ==== Start Bot ====
 if __name__ == "__main__":
     keep_alive()
     logger.info("Webserver started for keep-alive")
-    bot.run(os.environ['discordkey'])
+    asyncio.run(main())
