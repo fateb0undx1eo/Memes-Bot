@@ -25,15 +25,20 @@ class SelfEmotes(commands.Cog):
                             gif_url = data.get("url")
                             if gif_url:
                                 return gif_url
+                            else:
+                                print(f"[SelfEmotes] Attempt {attempt+1}: JSON missing 'url' for {action}")
+                        else:
+                            print(f"[SelfEmotes] Attempt {attempt+1}: HTTP {resp.status} for {url}")
             except Exception as e:
-                print(f"Attempt {attempt+1} failed for {url}: {e}")
+                print(f"[SelfEmotes] Attempt {attempt+1} failed for {url}: {e}")
             await asyncio.sleep(1)  # wait 1 sec before retry
 
-        # Optional fallback GIFs
+        # Optional fallback GIFs (guaranteed no blank embed)
         fallback_gifs = [
             "https://media.tenor.com/q4M8p0QQUCkAAAAC/anime-blush.gif",
             "https://media.tenor.com/G1i1ny-H9HIAAAAC/anime-smile.gif"
         ]
+        print(f"[SelfEmotes] Returning fallback GIF for {action}")
         return random.choice(fallback_gifs)
 
     @commands.command(name="happy", aliases=[
@@ -42,17 +47,14 @@ class SelfEmotes(commands.Cog):
     ])
     async def self_emote(self, ctx: commands.Context):
         cmd = ctx.command.name
-
         gif_url = await self.fetch_waifu_gif(cmd, nsfw=ctx.channel.is_nsfw())
-        if gif_url:
-            embed = discord.Embed(
-                description=f"{ctx.author.mention} is feeling **{cmd}**!",
-                color=random.randint(0, 0xFFFFFF)
-            )
-            embed.set_image(url=gif_url)
-            await ctx.send(embed=embed)
-        else:
-            await ctx.send("⚠️ Could not fetch a GIF, try again later.")
+
+        embed = discord.Embed(
+            description=f"{ctx.author.mention} is feeling **{cmd}**!",
+            color=random.randint(0, 0xFFFFFF)
+        )
+        embed.set_image(url=gif_url)
+        await ctx.send(embed=embed)
 
 async def setup(bot):
     await bot.add_cog(SelfEmotes(bot))
