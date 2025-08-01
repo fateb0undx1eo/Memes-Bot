@@ -69,14 +69,18 @@ class UserEmotes(commands.Cog):
         else:
             await ctx.send("⚠️ Could not fetch a GIF, try again later.")
 
-    # --- Roast / Compliment / Flirt ---
+    # --- Roast / Compliment / Flirt with random color embeds ---
     @commands.command(name="roast")
     async def roast(self, ctx, member: discord.Member = None):
         if member is None:
             await self._handle_no_mention(ctx, "roast")
             return
         line = random.choice(self.responses["roast"])
-        await ctx.send(f"🔥 {member.mention}, {line}")
+        embed = discord.Embed(
+            description=f"🔥 {member.mention}, {line}",
+            color=random.randint(0, 0xFFFFFF)
+        )
+        await ctx.send(embed=embed)
 
     @commands.command(name="compliment")
     async def compliment(self, ctx, member: discord.Member = None):
@@ -84,7 +88,11 @@ class UserEmotes(commands.Cog):
             await self._handle_no_mention(ctx, "compliment")
             return
         line = random.choice(self.responses["compliment"])
-        await ctx.send(f"💖 {member.mention}, {line}")
+        embed = discord.Embed(
+            description=f"💖 {member.mention}, {line}",
+            color=random.randint(0, 0xFFFFFF)
+        )
+        await ctx.send(embed=embed)
 
     @commands.command(name="flirt")
     async def flirt(self, ctx, member: discord.Member = None):
@@ -92,7 +100,11 @@ class UserEmotes(commands.Cog):
             await self._handle_no_mention(ctx, "flirt")
             return
         line = random.choice(self.responses["flirt"])
-        await ctx.send(f"😍 {member.mention}, {line}")
+        embed = discord.Embed(
+            description=f"😍 {member.mention}, {line}",
+            color=random.randint(0, 0xFFFFFF)
+        )
+        await ctx.send(embed=embed)
 
 # Required setup function for discord.py 2.x
 async def setup(bot: commands.Bot):
