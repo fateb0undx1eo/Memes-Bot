@@ -188,10 +188,13 @@ def make_embed(post):
 
 async def post_meme(interaction=None, ctx=None):
     try:
-        target_channel = (
-            interaction.channel if interaction 
-            else ctx.channel if ctx 
-            else bot.get_channel(MEME_CHANNEL_ID)
+        # Determine target channel - FIXED SYNTAX ISSUE HERE
+        if interaction:
+            target_channel = interaction.channel
+        elif ctx:
+            target_channel = ctx.channel
+        else:
+            target_channel = bot.get_channel(MEME_CHANNEL_ID)
         
         if not target_channel:
             logger.error("Meme channel not found!")
@@ -203,6 +206,7 @@ async def post_meme(interaction=None, ctx=None):
 
         embed = make_embed(post)
         
+        # Send to appropriate context
         if interaction:
             await interaction.response.send_message(embed=embed)
             msg = await interaction.original_response()
@@ -211,9 +215,11 @@ async def post_meme(interaction=None, ctx=None):
         else:
             msg = await target_channel.send(embed=embed)
             
+        # Add reactions
         await msg.add_reaction(UPVOTE)
         await msg.add_reaction(DOWNVOTE)
         
+        # Track meme
         meme_scores[msg.id] = {"score": 0, "embed": embed, "url": post.url}
         logger.info(f"Posted: r/{post.subreddit} - {post.title[:50]}...")
         return True
