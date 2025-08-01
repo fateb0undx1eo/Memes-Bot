@@ -1,8 +1,31 @@
-discord.py[voice]
-asyncpraw
-python-dotenv
-Flask
-discord.py
-aiohttp
-colorthief
-uvloop
+# Core Discord
+discord.py[voice]==2.5.2
+discord-py-slash-command==4.4.1
+
+# Reddit Integration
+asyncpraw==7.8.1
+asyncprawcore==2.4.0
+
+# Environment & Web
+python-dotenv==1.1.1
+Flask==3.0.3
+Werkzeug==3.0.3
+
+# HTTP & Utilities
+aiohttp==3.9.5
+aiosignal==1.4.0
+frozenlist==1.7.0
+
+# Color Processing
+colorthief==0.2.1
+Pillow==11.3.0
+
+# Performance
+uvloop==0.21.0; python_version >= '3.13'
+
+# Async Utilities
+aiosqlite==0.20.0
+async-timeout==4.0.3
+
+# Compatibility
+typing_extensions==4.12.2
