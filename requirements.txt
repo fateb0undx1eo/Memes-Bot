@@ -28,3 +28,6 @@ async-timeout==4.0.3
 
 # Compatibility
 typing_extensions==4.12.2
+
+# Maths
+sympy==1.13.1
