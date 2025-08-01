@@ -2,3 +2,7 @@ discord.py[voice]
 asyncpraw
 python-dotenv
 Flask
+discord.py
+aiohttp
+colorthief
+uvloop
