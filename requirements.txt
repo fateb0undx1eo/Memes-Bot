@@ -1,9 +1,9 @@
 # Core Discord
 discord.py[voice]==2.5.2
 
-# Reddit Integration
-asyncpraw==7.8.1
-asyncprawcore==2.4.0
+# Reddit Integration (downgraded to compatible versions)
+asyncpraw==7.7.0
+asyncprawcore==2.3.0
 
 # Environment & Web
 python-dotenv==1.1.1
@@ -22,8 +22,8 @@ Pillow==11.3.0
 # Performance
 uvloop==0.21.0; python_version >= '3.13'
 
-# Async Utilities
-aiosqlite==0.20.0
+# Async Utilities (downgraded to compatible version)
+aiosqlite==0.17.0
 async-timeout==4.0.3
 
 # Compatibility
