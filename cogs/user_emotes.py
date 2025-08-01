@@ -1,18 +1,21 @@
 import discord
 from discord.ext import commands
-import aiohttp, json, random, os
+import aiohttp, random
 
-class UserEmotes(commands.Cog):
+class SelfEmotes(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        # Supported user emotes
-        self.user_emotes = ["hug", "pat", "kiss", "slap", "poke"]
-        # Load responses JSON for roast/compliment/flirt
-        self.responses_file = os.path.join("data", "responses.json")
-        with open(self.responses_file, "r", encoding="utf-8") as f:
-            self.responses = json.load(f)
+        # Original API actions for self emotes
+        self.self_emotes = {
+            "happy_self": "happy",
+            "cry_self": "cry",
+            "blush_self": "blush",
+            "dance_self": "dance",
+            "smile_self": "smile"
+        }
 
     async def fetch_waifu_gif(self, action: str, nsfw: bool = False):
+        """Fetch GIF URL from waifu.pics API"""
         base = "https://api.waifu.pics"
         category = "nsfw" if nsfw else "sfw"
         url = f"{base}/{category}/{action}"
@@ -23,19 +26,12 @@ class UserEmotes(commands.Cog):
                     return data.get("url")
         return None
 
-    # --- User Emotes like hug/slap/kiss ---
-    @commands.command(name="hug", aliases=["pat","kiss","slap","poke"])
-    async def user_emote(self, ctx: commands.Context, member: discord.Member = None):
-        cmd = ctx.command.name
-
-        if member is None:
-            await ctx.send(f"❌ You need to tag someone to **{cmd}**, baka!")
-            return
-
-        gif_url = await self.fetch_waifu_gif(cmd, nsfw=ctx.channel.is_nsfw())
+    async def send_self_emote(self, ctx: commands.Context, action: str, display: str):
+        """Send self emote embed"""
+        gif_url = await self.fetch_waifu_gif(action, nsfw=ctx.channel.is_nsfw())
         if gif_url:
             embed = discord.Embed(
-                description=f"{ctx.author.mention} **{cmd}s** {member.mention}!",
+                description=f"{ctx.author.mention} is feeling **{display}**!",
                 color=random.randint(0, 0xFFFFFF)
             )
             embed.set_image(url=gif_url)
@@ -43,30 +39,26 @@ class UserEmotes(commands.Cog):
         else:
             await ctx.send("⚠️ Could not fetch a GIF, try again later.")
 
-    # --- Roast / Compliment / Flirt ---
-    @commands.command(name="roast")
-    async def roast(self, ctx: commands.Context, member: discord.Member = None):
-        if member is None:
-            await ctx.send("❌ Tag someone to roast, baka!")
-            return
-        line = random.choice(self.responses["roast"])
-        await ctx.send(f"🔥 {member.mention}, {line}")
+    # --- Commands ---
+    @commands.command(name="happy_self")
+    async def happy_self(self, ctx: commands.Context):
+        await self.send_self_emote(ctx, "happy", "happy")
 
-    @commands.command(name="compliment")
-    async def compliment(self, ctx: commands.Context, member: discord.Member = None):
-        if member is None:
-            await ctx.send("❌ Tag someone to compliment!")
-            return
-        line = random.choice(self.responses["compliment"])
-        await ctx.send(f"💖 {member.mention}, {line}")
+    @commands.command(name="cry_self")
+    async def cry_self(self, ctx: commands.Context):
+        await self.send_self_emote(ctx, "cry", "sad")
 
-    @commands.command(name="flirt")
-    async def flirt(self, ctx: commands.Context, member: discord.Member = None):
-        if member is None:
-            await ctx.send("❌ Tag someone to flirt with!")
-            return
-        line = random.choice(self.responses["flirt"])
-        await ctx.send(f"😍 {member.mention}, {line}")
+    @commands.command(name="blush_self")
+    async def blush_self(self, ctx: commands.Context):
+        await self.send_self_emote(ctx, "blush", "shy")
+
+    @commands.command(name="dance_self")
+    async def dance_self(self, ctx: commands.Context):
+        await self.send_self_emote(ctx, "dance", "dancing")
+
+    @commands.command(name="smile_self")
+    async def smile_self(self, ctx: commands.Context):
+        await self.send_self_emote(ctx, "smile", "smiling")
 
 async def setup(bot):
-    await bot.add_cog(UserEmotes(bot))
+    await bot.add_cog(SelfEmotes(bot))
